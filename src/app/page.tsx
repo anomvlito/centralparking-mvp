@@ -53,7 +53,7 @@ export default function ParkingMVP() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000);
+    const interval = setInterval(fetchData, 2000);
     const theme = localStorage.getItem("theme");
     if (theme === "light") setIsDarkMode(false);
     return () => clearInterval(interval);
