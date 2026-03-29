@@ -66,6 +66,14 @@ async def get_history():
             if row: rows.append(row)
     return rows[-50:][::-1]
 
+@app.post("/api/clear-history")
+async def clear_history():
+    with open(HISTORY_FILE, mode='w', newline='') as f:
+        import csv
+        writer = csv.writer(f)
+        writer.writerow(["Timestamp", "Plate", "Action", "Status", "Fee", "Confidence"])
+    return {"status": "history cleared"}
+
 @app.get("/api/stats")
 async def get_stats():
     import csv
@@ -74,6 +82,7 @@ async def get_stats():
     income, entries, exits = 0, 0, 0
     with open(HISTORY_FILE, mode='r') as f:
         reader = csv.reader(f)
+        next(reader, None)
         for row in reader:
             if len(row) < 3 or not row[0].startswith(today): continue
             action = row[2]
@@ -94,31 +103,23 @@ async def detect(image: UploadFile = File(...)):
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        # Pass 1
         results = alpr.predict(img)
-        
-        # Pass 2: Enhancement
         if not results:
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-            img_enhanced = cv2.cvtColor(cv2.merge((clahe.apply(l),a,b)), cv2.COLOR_LAB2BGR)
-            results = alpr.predict(img_enhanced)
-            
+            results = alpr.predict(cv2.cvtColor(cv2.merge((clahe.apply(l),a,b)), cv2.COLOR_LAB2BGR))
         if not results: return {"plate": None}
-        
         best = results[0]
-        plate_text = getattr(best, 'ocr', str(best))
-        if hasattr(plate_text, 'text'): plate_text = plate_text.text
+        p_text = getattr(best, 'ocr', str(best))
+        if hasattr(p_text, 'text'): p_text = p_text.text
         conf = getattr(best, 'confidence', 1.0)
-        
-        log_to_csv(str(plate_text), "DETECTION", "REAL", conf=conf)
-        return {"plate": str(plate_text), "confidence": conf, "mocked": False}
+        log_to_csv(str(p_text), "DETECTION", "REAL", conf=conf)
+        return {"plate": str(p_text), "confidence": conf, "mocked": False}
     except: return {"plate": None}
 
 @app.post("/api/entry")
-async def reg_entry(e: CarEntry):
+async def entry(e: CarEntry):
     db = load_db()
     db[e.plate] = {"plate": e.plate, "entryTime": datetime.datetime.now().timestamp() * 1000, "isEvent": e.isEvent, "eventFee": e.eventFee}
     save_db(db)
@@ -126,7 +127,7 @@ async def reg_entry(e: CarEntry):
     return db[e.plate]
 
 @app.post("/api/exit/{plate}")
-async def reg_exit(plate: str, fee: float = 0):
+async def exit_car(plate: str, fee: float = 0):
     db = load_db()
     if plate in db:
         car = db.pop(plate)
@@ -136,10 +137,10 @@ async def reg_exit(plate: str, fee: float = 0):
     raise HTTPException(status_code=404)
 
 @app.delete("/api/cars/{plate}")
-async def reg_void(plate: str):
+async def delete_car(plate: str):
     db = load_db()
     if plate in db:
-        del db[plate]
+        del db[car := plate]
         save_db(db)
         log_to_csv(plate, "VOID")
     return {"status": "voided"}
