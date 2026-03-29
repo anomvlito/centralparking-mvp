@@ -4,5 +4,41 @@
     "entryTime": 1774800172404.8381,
     "isEvent": false,
     "eventFee": null
+  },
+  "XH6640": {
+    "plate": "XH6640",
+    "entryTime": 1774802556296.756,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "BKJY33": {
+    "plate": "BKJY33",
+    "entryTime": 1774802572365.422,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "BBBB10": {
+    "plate": "BBBB10",
+    "entryTime": 1774802586671.042,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "GTBC25": {
+    "plate": "GTBC25",
+    "entryTime": 1774802604550.116,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "BBWB40": {
+    "plate": "BBWB40",
+    "entryTime": 1774802615739.916,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "BCBB60": {
+    "plate": "BCBB60",
+    "entryTime": 1774802625675.363,
+    "isEvent": false,
+    "eventFee": null
   }
 }
