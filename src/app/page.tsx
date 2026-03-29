@@ -235,8 +235,11 @@ export default function ParkingMVP() {
             <span className="font-semibold text-indigo-300">Cobrar Salida</span>
           </button>
         </section>
+        </div>
 
-        <section className="pt-4">
+        {/* Right Column (Active Cars List) */}
+        <div className="lg:col-span-5 mt-8 lg:mt-0 p-6 bg-slate-900/40 rounded-3xl border border-slate-800 shadow-xl">
+        <section className="pt-1">
           <h2 className="text-slate-400 text-sm font-semibold mb-3 px-2 uppercase tracking-wider">Vehículos Ingresados</h2>
           {Object.keys(cars).length === 0 ? (
             <div className="text-center p-8 bg-slate-900/30 rounded-3xl border border-slate-800/50 border-dashed">
@@ -272,6 +275,7 @@ export default function ParkingMVP() {
               ))}
             </ul>
           )}
+        </section>
         </div>
       </main>
 
