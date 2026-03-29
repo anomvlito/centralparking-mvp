@@ -30,20 +30,18 @@ def save_db(data):
     with open(DB_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
-def log_to_csv(plate, action, status="REAL"):
+def log_to_csv(plate, action, status="REAL", fee=0):
     import csv
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(HISTORY_FILE, mode='a', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow([timestamp, plate, action, status])
+        writer.writerow([timestamp, plate, action, status, fee])
 
 # ML Loading
 HAS_ML = False
 alpr = None
 try:
     from fast_alpr import ALPR
-    import cv2
-    import numpy as np
     alpr = ALPR(
         detector_model="yolo-v9-t-384-license-plate-end2end",
         ocr_model="cct-xs-v2-global-model",
@@ -112,12 +110,54 @@ async def register_entry(entry: CarEntry):
     return db[entry.plate]
 
 @app.post("/api/exit/{plate}")
-async def register_exit(plate: str):
+async def register_exit(plate: str, fee: float = 0):
     db = load_db()
     if plate not in db:
         raise HTTPException(status_code=404, detail="Car not found")
     
     car = db.pop(plate)
     save_db(db)
-    log_to_csv(plate, "EXIT")
+    log_to_csv(plate, "EXIT", fee=fee)
     return {"message": "Exit registered", "car": car}
+
+@app.delete("/api/cars/{plate}")
+async def delete_car(plate: str):
+    db = load_db()
+    if plate not in db:
+        raise HTTPException(status_code=404, detail="Car not found")
+    
+    del db[plate]
+    save_db(db)
+    log_to_csv(plate, "VOID")
+    return {"message": "Car record removed (Voided)"}
+
+@app.get("/api/stats")
+async def get_stats():
+    import csv
+    if not os.path.exists(HISTORY_FILE):
+        return {"today_income": 0, "today_entries": 0, "today_exits": 0, "parked_now": len(load_db())}
+    
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    income = 0
+    entries = 0
+    exits = 0
+    
+    with open(HISTORY_FILE, mode='r') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) < 3: continue
+            ts, plate, action = row[0], row[1], row[2]
+            if ts.startswith(today):
+                if action == "ENTRY": entries += 1
+                elif action == "EXIT": 
+                    exits += 1
+                    if len(row) >= 5:
+                        try: income += float(row[4])
+                        except: pass
+    
+    return {
+        "today_income": income,
+        "today_entries": entries,
+        "today_exits": exits,
+        "parked_now": len(load_db())
+    }
