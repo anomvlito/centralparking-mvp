@@ -157,7 +157,10 @@ export default function ParkingMVP() {
             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-400">
               Central Parking
             </h1>
-            <p className="text-xs text-slate-400">Terminal MVP</p>
+            <p className="text-xs text-slate-400">Terminal MVP - Conectado a: <span className="font-mono text-indigo-400">{process.env.NEXT_PUBLIC_API_URL ? "Backend Local" : "Nube Vercel"}</span></p>
+            {process.env.NEXT_PUBLIC_API_URL && (
+              <p className="text-[10px] text-slate-500 font-mono truncate max-w-[150px]">{process.env.NEXT_PUBLIC_API_URL}</p>
+            )}
           </div>
         </div>
         <div className="text-right">
