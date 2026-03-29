@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Webcam from "react-webcam";
-import { Camera, Search, LogOut, LogIn, CalendarDays, X, Check, Car, History } from "lucide-react";
+import { Camera, Search, LogOut, LogIn, CalendarDays, X, Check, Car, History, Sun, Moon, MapPin, MousePointer2, Clock, DollarSign, Activity } from "lucide-react";
 import { format } from "date-fns";
 import { type ParkedCar, calculateFee } from "../lib/parking";
 
@@ -21,6 +21,8 @@ export default function ParkingMVP() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [manualPlate, setManualPlate] = useState("");
   const [showManualInput, setShowManualInput] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [activeTab, setActiveTab] = useState<"actions" | "monitor">("actions");
   
   const [actionResult, setActionResult] = useState<{
     plate: string;
@@ -31,88 +33,103 @@ export default function ParkingMVP() {
 
   const webcamRef = useRef<Webcam>(null);
 
-  useEffect(() => {
-    const saved = localStorage.getItem("parked_cars");
-    if (saved) {
-      setCars(JSON.parse(saved));
+  const fetchCars = async () => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+      const response = await fetch(`${apiUrl}/cars`);
+      if (response.ok) {
+        const data = await response.json();
+        setCars(data);
+      }
+    } catch (err) {
+      console.warn("Backend local not reachable for sync, using localStorage fallback.");
+      const saved = localStorage.getItem("parked_cars");
+      if (saved) setCars(JSON.parse(saved));
     }
+  };
+
+  useEffect(() => {
+    fetchCars();
+    const interval = setInterval(fetchCars, 10000); // Sync every 10s
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme === "light") setIsDarkMode(false);
+    return () => clearInterval(interval);
   }, []);
 
-  const saveCars = (newCars: Record<string, ParkedCar>) => {
-    setCars(newCars);
-    localStorage.setItem("parked_cars", JSON.stringify(newCars));
+  const toggleTheme = () => {
+    const newTheme = !isDarkMode;
+    setIsDarkMode(newTheme);
+    localStorage.setItem("theme", newTheme ? "dark" : "light");
   };
 
-  const handleManualEntry = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!manualPlate) return;
-    const cleanPlate = manualPlate.toUpperCase().trim();
-    processPlate(cleanPlate, cameraMode);
-    setShowManualInput(false);
-    setManualPlate("");
-  };
-
-  const processPlate = (plateNumber: string, mode: "entry" | "exit") => {
+  const processPlate = async (plateNumber: string, mode: "entry" | "exit") => {
     const now = Date.now();
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
     
-    if (mode === "entry") {
-      if (cars[plateNumber]) {
-        alert("¡Ese auto ya está registrado en el estacionamiento!");
-        setIsCameraOpen(false);
-        return;
+    try {
+      if (mode === "entry") {
+        if (cars[plateNumber]) {
+          alert("¡Ese auto ya está registrado!");
+          setIsCameraOpen(false);
+          return;
+        }
+
+        const res = await fetch(`${apiUrl}/entry`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            plate: plateNumber,
+            isEvent: selectedEvent.amount !== null,
+            eventFee: selectedEvent.amount
+          })
+        });
+
+        if (!res.ok) throw new Error("Failed to register entry on backend");
+        const newCar = await res.json();
+        setCars((prev) => ({ ...prev, [plateNumber]: newCar }));
+        setActionResult({ plate: plateNumber, action: "entered", time: format(now, "HH:mm") });
+
+      } else {
+        const existingCar = cars[plateNumber];
+        if (!existingCar) {
+          alert("Auto no encontrado.");
+          setIsCameraOpen(false);
+          return;
+        }
+
+        const fee = calculateFee(existingCar.entryTime, now, existingCar.isEvent, existingCar.eventFee);
+        
+        const res = await fetch(`${apiUrl}/exit/${plateNumber}`, { method: "POST" });
+        if (!res.ok) throw new Error("Failed to register exit on backend");
+
+        setCars((prev) => {
+          const next = { ...prev };
+          delete next[plateNumber];
+          return next;
+        });
+
+        setActionResult({
+          plate: plateNumber,
+          action: "exited",
+          fee: fee,
+          time: format(now - existingCar.entryTime, "HH:mm")
+        });
       }
-      
-      const newCar: ParkedCar = {
-        plate: plateNumber,
-        entryTime: now,
-        isEvent: selectedEvent.amount !== null,
-        eventFee: selectedEvent.amount || undefined
-      };
-      saveCars({ ...cars, [plateNumber]: newCar });
-      
-      setActionResult({
-        plate: plateNumber,
-        action: "entered",
-        time: format(now, "HH:mm")
-      });
-      
-    } else {
-      const existingCar = cars[plateNumber];
-      if (!existingCar) {
-        alert("Auto no encontrado. Quizás nunca se registró el ingreso.");
-        setIsCameraOpen(false);
-        return;
-      }
-      
-      const fee = calculateFee(existingCar.entryTime, now, existingCar.isEvent, existingCar.eventFee);
-      
-      const newCars = { ...cars };
-      delete newCars[plateNumber];
-      saveCars(newCars);
-      
-      setActionResult({
-        plate: plateNumber,
-        action: "exited",
-        fee: fee,
-        time: format(now - existingCar.entryTime, "HH:mm")
-      });
+    } catch (err) {
+      console.error(err);
+      alert("Error sincronizando con el backend. Operación cancelada.");
+    } finally {
+      setIsCameraOpen(false);
+      setTimeout(() => setActionResult(null), 8000);
     }
-    
-    setIsCameraOpen(false);
-    
-    setTimeout(() => {
-      setActionResult(null);
-    }, 6000);
   };
 
   const captureAndAnalyze = useCallback(async () => {
     if (!webcamRef.current) return;
-    
     setIsAnalyzing(true);
     const imageSrc = webcamRef.current.getScreenshot();
-    
     if (!imageSrc) {
-      alert("Error al acceder a la captura");
+      alert("Error al capturar");
       setIsAnalyzing(false);
       return;
     }
@@ -120,241 +137,242 @@ export default function ParkingMVP() {
     try {
       const res = await fetch(imageSrc);
       const blob = await res.blob();
-      
       const formData = new FormData();
       formData.append("image", blob, "capture.jpg");
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
-      const response = await fetch(`${apiUrl}/detect`, {
-        method: "POST",
-        body: formData
-      });
-
+      const response = await fetch(`${apiUrl}/detect`, { method: "POST", body: formData });
       const data = await response.json();
       
       if (data.plate && data.plate !== "None") {
         processPlate(data.plate, cameraMode);
       } else {
-        alert("No se pudo detectar ninguna patente. Intenta acercarte o usa el modo manual.");
+        alert("Sin detección.");
       }
-
     } catch (err) {
       console.error(err);
-      alert("Error conectando con el analizador de patentes. El servidor AI podría no estar disponible.");
+      alert("Error de conexión AI.");
     } finally {
       setIsAnalyzing(false);
     }
   }, [webcamRef, cameraMode, processPlate]);
 
+  // Stay percentage for progress bars (max 4h = 240 min)
+  const getStayProgress = (entryTime: number) => {
+    const mins = (Date.now() - entryTime) / 60000;
+    return Math.min((mins / 240) * 100, 100);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans pb-20">
-      <header className="bg-slate-900 border-b border-indigo-500/30 sticky top-0 z-10 px-6 py-4 flex items-center justify-between shadow-xl">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
-            <Car className="w-5 h-5 text-white" />
+    <div className={`min-h-screen transition-colors duration-500 font-sans pb-20 ${isDarkMode ? 'bg-slate-950 text-slate-200' : 'bg-slate-50 text-slate-900'}`}>
+      <header className={`sticky top-0 z-30 px-6 py-4 flex items-center justify-between border-b backdrop-blur-md transition-all ${isDarkMode ? 'bg-slate-900/80 border-indigo-500/30 shadow-2xl shadow-black/50' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+            <Car className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-400">
+            <h1 className="text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500">
               Central Parking
             </h1>
-            <p className="text-xs text-slate-400">Terminal MVP - Conectado a: <span className="font-mono text-indigo-400">{process.env.NEXT_PUBLIC_API_URL ? "Backend Local" : "Nube Vercel"}</span></p>
-            {process.env.NEXT_PUBLIC_API_URL && (
-              <p className="text-[10px] text-slate-500 font-mono truncate max-w-[150px]">{process.env.NEXT_PUBLIC_API_URL}</p>
-            )}
+            <div className="flex items-center gap-2 mt-0.5">
+              <div className={`w-2 h-2 rounded-full ${process.env.NEXT_PUBLIC_API_URL ? 'bg-emerald-500 animate-pulse' : 'bg-yellow-500'}`} />
+              <span className="text-[10px] font-bold uppercase opacity-60 tracking-tighter">
+                {process.env.NEXT_PUBLIC_API_URL ? "Local Link Active" : "Internal Mock"}
+              </span>
+            </div>
           </div>
         </div>
-        <div className="text-right">
-          <p className="font-mono text-sm text-indigo-300">{format(new Date(), "dd/MM/yyyy")}</p>
-          <p className="text-xs text-slate-500">{Object.keys(cars).length} Vehículos</p>
+        
+        <div className="flex items-center gap-6">
+          <nav className={`hidden md:flex bg-slate-800/20 p-1.5 rounded-2xl gap-1 border ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
+            <button 
+              onClick={() => setActiveTab("actions")}
+              className={`px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-widest transition-all ${activeTab === 'actions' ? 'bg-indigo-600 text-white shadow-lg' : 'opacity-50 hover:opacity-80'}`}
+            >
+              Control
+            </button>
+            <button 
+              onClick={() => setActiveTab("monitor")}
+              className={`px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-widest transition-all ${activeTab === 'monitor' ? 'bg-indigo-600 text-white shadow-lg' : 'opacity-50 hover:opacity-80'}`}
+            >
+              Monitor
+            </button>
+          </nav>
+
+          <button onClick={toggleTheme} className={`p-2.5 rounded-xl transition-all ${isDarkMode ? 'bg-slate-800 text-yellow-400' : 'bg-slate-100 text-slate-600'}`}>
+            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto p-4 mt-4 lg:grid lg:grid-cols-12 lg:gap-8 items-start">
-        {/* Left Column (Actions) */}
-        <div className="lg:col-span-7 space-y-6">
+      <main className="max-w-6xl mx-auto p-4 mt-6">
+        
+        {/* Mobile Nav */}
+        <div className="md:hidden flex gap-2 mb-6">
+           <button onClick={() => setActiveTab("actions")} className={`flex-1 py-3 rounded-2xl font-black text-xs uppercase ${activeTab === 'actions' ? 'bg-indigo-600 text-white' : 'bg-slate-800/40 text-slate-500'}`}>Control</button>
+           <button onClick={() => setActiveTab("monitor")} className={`flex-1 py-3 rounded-2xl font-black text-xs uppercase ${activeTab === 'monitor' ? 'bg-indigo-600 text-white' : 'bg-slate-800/40 text-slate-500'}`}>Monitor</button>
+        </div>
 
-        {actionResult && (
-          <div className={`animate-in fade-in slide-in-from-top-4 p-4 rounded-2xl border backdrop-blur-md flex items-start gap-4 shadow-2xl ${actionResult.action === 'entered' ? 'bg-emerald-500/10 border-emerald-500/50' : 'bg-indigo-500/10 border-indigo-500/50'}`}>
-             <div className={`p-3 rounded-full ${actionResult.action === 'entered' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-indigo-500/20 text-indigo-400'}`}>
-               {actionResult.action === 'entered' ? <LogIn size={24} /> : <LogOut size={24} />}
-             </div>
-             <div>
-               <h3 className="font-bold text-lg text-white">
-                 Patente {actionResult.plate}
-               </h3>
-               {actionResult.action === 'entered' ? (
-                 <p className="text-emerald-300/80">Ingreso registrado a las {actionResult.time}</p>
-               ) : (
-                 <>
-                   <p className="text-indigo-300/80">Salida registrada exitosamente</p>
-                   {actionResult.fee !== undefined && (
-                     <p className="text-2xl font-black text-white mt-1">${actionResult.fee.toLocaleString("es-CL")}</p>
-                   )}
-                 </>
+        {activeTab === "actions" ? (
+          <div className="lg:grid lg:grid-cols-12 lg:gap-8 items-start animate-in fade-in duration-500">
+            <div className="lg:col-span-7 space-y-6">
+               {actionResult && (
+                 <div className={`p-6 rounded-[2rem] border-2 shadow-2xl flex items-center gap-5 ${actionResult.action === 'entered' ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-indigo-500/10 border-indigo-500/30'}`}>
+                    <div className={`p-4 rounded-2xl ${actionResult.action === 'entered' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-indigo-500/20 text-indigo-400'}`}>
+                      {actionResult.action === 'entered' ? <LogIn size={32} /> : <LogOut size={32} />}
+                    </div>
+                    <div className="flex-1">
+                      <span className="text-[10px] font-black uppercase tracking-[0.2em] opacity-50">Vehículo Procesado</span>
+                      <h3 className="font-black text-3xl tracking-tight">{actionResult.plate}</h3>
+                    </div>
+                    {actionResult.fee !== undefined && (
+                      <div className="text-right">
+                        <p className="text-xs font-bold opacity-60">Total Tarifa</p>
+                        <p className="text-4xl font-black">${actionResult.fee.toLocaleString("es-CL")}</p>
+                      </div>
+                    )}
+                 </div>
                )}
+
+               <section className={`p-8 rounded-[2.5rem] border shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                  <div className="flex justify-between items-center mb-6">
+                    <h2 className="font-black text-xl uppercase tracking-tight">Tarifado Activo</h2>
+                    <DollarSign className="text-indigo-500" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {EVENT_FEES.map(fee => (
+                      <button 
+                        key={fee.id} 
+                        onClick={() => setSelectedEvent(fee)}
+                        className={`p-4 rounded-2xl text-left border-2 transition-all group ${selectedEvent.id === fee.id ? 'bg-indigo-600 border-indigo-500 text-white scale-[1.02] shadow-xl shadow-indigo-500/20' : isDarkMode ? 'bg-slate-800/50 border-transparent hover:border-slate-700' : 'bg-slate-50 border-transparent hover:border-slate-200'}`}
+                      >
+                        <div className="font-bold text-sm">{fee.name}</div>
+                        <div className="text-[10px] font-mono opacity-80">{fee.amount ? `$${fee.amount.toLocaleString("es-CL")}` : "x Minuto"}</div>
+                      </button>
+                    ))}
+                  </div>
+               </section>
+
+               <div className="grid grid-cols-2 gap-4">
+                  <button onClick={() => { setCameraMode("entry"); setIsCameraOpen(true); }} className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center gap-4 transition-all hover:scale-[1.02] active:scale-95 ${isDarkMode ? 'bg-emerald-500/5 border-emerald-500/20 shadow-xl' : 'bg-emerald-50 border-emerald-200 shadow-md'}`}>
+                    <div className="p-4 rounded-3xl bg-emerald-500 text-white shadow-lg"><LogIn size={32} /></div>
+                    <span className="font-black text-lg">ENTRADA</span>
+                  </button>
+                  <button onClick={() => { setCameraMode("exit"); setIsCameraOpen(true); }} className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center gap-4 transition-all hover:scale-[1.02] active:scale-95 ${isDarkMode ? 'bg-indigo-500/5 border-indigo-500/20 shadow-xl' : 'bg-indigo-50 border-indigo-200 shadow-md'}`}>
+                    <div className="p-4 rounded-3xl bg-indigo-500 text-white shadow-lg"><LogOut size={32} /></div>
+                    <span className="font-black text-lg">SALIDA</span>
+                  </button>
+               </div>
+            </div>
+
+            <div className={`lg:col-span-5 mt-8 lg:mt-0 p-8 rounded-[2.5rem] border shadow-2xl overflow-hidden relative ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+               <div className="flex items-center gap-3 mb-6">
+                  <Activity className="text-emerald-500" size={20} />
+                  <h2 className="text-sm font-black uppercase tracking-[0.2em] opacity-60">Estado Estacionamiento</h2>
+               </div>
+               
+               <div className="space-y-3">
+                  {Object.values(cars).length === 0 ? (
+                    <div className="text-center py-20 opacity-30 italic">No hay vehículos ingresados</div>
+                  ) : (
+                    Object.values(cars).reverse().slice(0, 8).map(car => (
+                      <div key={car.plate} className={`p-4 rounded-2xl flex justify-between items-center transition-all ${isDarkMode ? 'bg-slate-800/40 hover:bg-slate-800 shadow-sm' : 'bg-slate-50'}`}>
+                        <div className="font-bold font-mono text-lg tracking-widest">{car.plate}</div>
+                        <div className="text-xs font-bold opacity-40">{format(car.entryTime, "HH:mm")}</div>
+                      </div>
+                    ))
+                  )}
+               </div>
+            </div>
+          </div>
+        ) : (
+          /* Monitor Tab */
+          <div className="animate-in slide-in-from-right-10 duration-500 space-y-6">
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {Object.values(cars).map((car) => {
+                  const progress = getStayProgress(car.entryTime);
+                  const mins = Math.floor((Date.now() - car.entryTime) / 60000);
+                  
+                  return (
+                    <div key={car.plate} className={`p-6 rounded-[2rem] border-2 shadow-2xl relative overflow-hidden transition-all hover:translate-y-[-4px] ${isDarkMode ? 'bg-slate-900 border-slate-800 shadow-black' : 'bg-white border-slate-200 shadow-slate-200'}`}>
+                      <div className="flex justify-between items-start mb-6">
+                        <div className="font-black text-3xl font-mono tracking-widest">{car.plate}</div>
+                        <div className={`px-2 py-1 rounded-lg text-[10px] font-bold uppercase ${car.isEvent ? 'bg-purple-500 text-white' : 'bg-indigo-500 text-white'}`}>
+                          {car.isEvent ? "Evento" : "Normal"}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <div className="flex justify-between text-xs font-bold opacity-60">
+                          <div className="flex items-center gap-1"><Clock size={12} /> {format(car.entryTime, "HH:mm")}</div>
+                          <div>Estadía: {Math.floor(mins / 60)}h {mins % 60}m</div>
+                        </div>
+                        
+                        {!car.isEvent && (
+                          <div className="space-y-1.5">
+                            <div className="h-4 w-full bg-slate-800 rounded-full overflow-hidden border border-slate-700 shadow-inner">
+                              <div 
+                                className={`h-full transition-all duration-1000 ${progress > 90 ? 'bg-red-500 animate-pulse' : progress > 60 ? 'bg-orange-500' : 'bg-emerald-500'}`} 
+                                style={{ width: `${progress}%` }} 
+                              />
+                            </div>
+                            <div className="flex justify-between text-[10px] font-black opacity-30">
+                              <span>0h</span>
+                              <span>4h Max p/Min</span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="pt-4 border-t border-dashed border-slate-800 mt-4 flex justify-between items-center">
+                           <div className="font-bold text-lg">${calculateFee(car.entryTime, Date.now(), car.isEvent, car.eventFee).toLocaleString("es-CL")}</div>
+                           <button onClick={() => processPlate(car.plate, "exit")} className={`p-2 rounded-xl ${isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-white hover:bg-red-500/20' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                              <LogOut size={16} />
+                           </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
              </div>
           </div>
         )}
-
-        <section className="bg-slate-900/50 p-5 rounded-3xl border border-slate-800 shadow-xl">
-          <div className="flex items-center gap-2 mb-4">
-            <CalendarDays className="w-5 h-5 text-purple-400" />
-            <h2 className="text-slate-300 font-medium">Modo de Operación</h2>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-3">
-            {EVENT_FEES.map((mode) => (
-              <button
-                key={mode.id}
-                onClick={() => setSelectedEvent(mode)}
-                className={`p-3 rounded-2xl text-left transition-all duration-300 ${selectedEvent.id === mode.id ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 border shadow-inner shadow-indigo-500/20' : 'bg-slate-800/50 border-transparent text-slate-400 border hover:bg-slate-800'}`}
-              >
-                <div className="font-semibold text-sm">{mode.name}</div>
-                <div className="text-xs opacity-70">
-                  {mode.amount ? `$${mode.amount.toLocaleString("es-CL")}` : "Por minuto"}
-                </div>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="grid grid-cols-2 gap-4">
-          <button
-            onClick={() => { setCameraMode("entry"); setIsCameraOpen(true); }}
-            className="group relative overflow-hidden flex flex-col items-center justify-center gap-3 p-6 rounded-3xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-all active:scale-95"
-          >
-            <div className="p-4 rounded-full bg-emerald-500/20 text-emerald-400 ring-4 ring-emerald-500/10">
-              <Camera size={32} />
-            </div>
-            <span className="font-semibold text-emerald-300">Dar Entrada</span>
-          </button>
-
-          <button
-            onClick={() => { setCameraMode("exit"); setIsCameraOpen(true); }}
-            className="group relative overflow-hidden flex flex-col items-center justify-center gap-3 p-6 rounded-3xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition-all active:scale-95"
-          >
-            <div className="p-4 rounded-full bg-indigo-500/20 text-indigo-400 ring-4 ring-indigo-500/10">
-              <LogOut size={32} />
-            </div>
-            <span className="font-semibold text-indigo-300">Cobrar Salida</span>
-          </button>
-        </section>
-        </div>
-
-        {/* Right Column (Active Cars List) */}
-        <div className="lg:col-span-5 mt-8 lg:mt-0 p-6 bg-slate-900/40 rounded-3xl border border-slate-800 shadow-xl">
-        <section className="pt-1">
-          <h2 className="text-slate-400 text-sm font-semibold mb-3 px-2 uppercase tracking-wider">Vehículos Ingresados</h2>
-          {Object.keys(cars).length === 0 ? (
-            <div className="text-center p-8 bg-slate-900/30 rounded-3xl border border-slate-800/50 border-dashed">
-              <History className="w-8 h-8 mx-auto text-slate-600 mb-2" />
-              <p className="text-slate-500 text-sm">No hay vehículos ingresados</p>
-            </div>
-          ) : (
-            <ul className="space-y-3">
-              {Object.values(cars).reverse().map((car) => (
-                <li key={car.plate} className="bg-slate-900/50 p-4 rounded-2xl flex items-center justify-between border border-slate-800 backdrop-blur-sm">
-                  <div className="flex items-center gap-4">
-                    <div className="font-mono text-lg font-bold bg-slate-800/80 px-3 py-1.5 rounded-xl border-l-4 border-indigo-500 tracking-widest text-white shadow-inner">
-                      {car.plate}
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-xs text-slate-400">
-                        {format(car.entryTime, "HH:mm")}
-                      </span>
-                      {car.isEvent && (
-                        <span className="text-[10px] text-purple-400 uppercase tracking-widest font-bold">
-                          Evento vip
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => processPlate(car.plate, "exit")}
-                    className="p-2.5 rounded-xl bg-slate-800 hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 transition-colors"
-                  >
-                    <LogOut size={18} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-        </div>
       </main>
 
       {isCameraOpen && (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col">
-          <div className="p-4 flex justify-between items-center absolute top-0 left-0 right-0 z-10 bg-gradient-to-b from-black/80 to-transparent">
-            <h2 className="text-white font-semibold text-lg drop-shadow-md">
-              {cameraMode === "entry" ? "Escanear Ingreso" : "Escanear Salida"}
-            </h2>
-            <button 
-              onClick={() => setIsCameraOpen(false)}
-              className="p-2 bg-white/10 rounded-full backdrop-blur text-white hover:bg-white/20 transition-colors"
-            >
-              <X size={24} />
-            </button>
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
+          <div className="p-6 flex justify-between items-center absolute top-0 inset-x-0 z-10 bg-gradient-to-b from-black via-black/80 to-transparent">
+            <h2 className="text-white font-black text-2xl tracking-tighter uppercase italic">{cameraMode === "entry" ? "Check-In" : "Check-Out"}</h2>
+            <button onClick={() => setIsCameraOpen(false)} className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center text-white backdrop-blur-xl border border-white/20"><X /></button>
           </div>
-          
-          <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
-            <Webcam
-              audio={false}
-              ref={webcamRef}
-              screenshotFormat="image/jpeg"
-              videoConstraints={{ facingMode: "environment" }}
-              className="object-cover h-full w-full"
-            />
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-64 h-32 border-2 border-white/50 rounded-xl relative">
-                  <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg" />
-                  <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg" />
-                  <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg" />
-                  <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg" />
-              </div>
+          <div className="flex-1 relative flex items-center justify-center">
+            <Webcam audio={false} ref={webcamRef} screenshotFormat="image/jpeg" videoConstraints={{ facingMode: "environment" }} className="h-full w-full object-cover" />
+            <div className="absolute inset-0 flex items-center justify-center p-10 pointer-events-none">
+               <div className="w-full max-w-sm aspect-[16/9] border-2 border-emerald-400/50 rounded-3xl shadow-[0_0_0_1000px_rgba(0,0,0,0.6)] relative">
+                  <div className="absolute inset-x-0 top-0 h-[2px] bg-emerald-400 shadow-[0_0_15px_emerald] animate-[scan_3s_infinite]" />
+               </div>
             </div>
-            
             {showManualInput && (
-              <div className="absolute inset-x-0 bottom-40 px-6 animate-in slide-in-from-bottom-4 z-20">
-                <form onSubmit={handleManualEntry} className="bg-slate-900/90 backdrop-blur p-4 rounded-3xl border border-slate-700 shadow-2xl flex gap-2">
-                   <input
-                     autoFocus
-                     type="text"
-                     value={manualPlate}
-                     onChange={(e) => setManualPlate(e.target.value)}
-                     placeholder="Ingresa Patente (Ej: ABCD12)"
-                     className="flex-1 bg-black/50 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono uppercase focus:ring-2 ring-indigo-500 outline-none placeholder:text-slate-500 placeholder:normal-case font-bold tracking-widest text-lg"
-                   />
-                   <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 font-bold flex items-center justify-center transition-all">
-                     <Check />
-                   </button>
+              <div className="absolute bottom-40 inset-x-0 px-6 z-20 animate-in slide-in-from-bottom-5">
+                <form onSubmit={handleManualEntry} className="bg-white p-2 rounded-3xl flex shadow-2xl">
+                  <input autoFocus type="text" value={manualPlate} onChange={e => setManualPlate(e.target.value)} placeholder="ABC-123" className="flex-1 bg-slate-100 rounded-2xl px-6 py-4 font-mono font-black text-xl uppercase text-slate-900 outline-none" />
+                  <button type="submit" className="bg-slate-950 text-white px-6 rounded-2xl"><Check /></button>
                 </form>
               </div>
             )}
           </div>
-          
-          <div className="h-40 bg-black p-6 flex items-center justify-around pb-10">
-            <button 
-               onClick={() => setShowManualInput(!showManualInput)}
-               className="p-4 rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
-            >
-              <Search size={24} />
+          <div className="h-44 bg-black px-10 flex items-center justify-between pb-8">
+            <button onClick={() => setShowManualInput(!showManualInput)} className={`w-16 h-16 rounded-2xl flex items-center justify-center ${showManualInput ? 'bg-indigo-600 text-white' : 'bg-white/10 text-white'}`}><Search /></button>
+            <button onClick={captureAndAnalyze} disabled={isAnalyzing} className="w-24 h-24 rounded-full border-4 border-emerald-400 flex items-center justify-center relative">
+               {isAnalyzing ? <div className="w-6 h-6 border-4 border-white/20 border-t-white rounded-full animate-spin" /> : <div className="w-18 h-18 bg-white rounded-full shadow-lg" />}
             </button>
-            <button
-              onClick={captureAndAnalyze}
-              disabled={isAnalyzing}
-              className={`w-20 h-20 rounded-full border-4 flex items-center justify-center transition-all ${isAnalyzing ? 'border-slate-600 bg-slate-800 scale-95' : 'border-emerald-400 bg-emerald-400/20 active:scale-90 active:bg-emerald-400/40'}`}
-            >
-              {isAnalyzing ? (
-                <div className="w-8 h-8 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-              ) : (
-                <div className="w-16 h-16 rounded-full bg-white transition-transform" />
-              )}
-            </button>
-            <div className="w-14" />
+            <div className="w-16" />
           </div>
         </div>
       )}
+
+      <style jsx global>{`
+        @keyframes scan { 0%, 100% { top: 0; } 50% { top: 100%; } }
+      `}</style>
     </div>
   );
 }

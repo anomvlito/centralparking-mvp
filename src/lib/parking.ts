@@ -24,16 +24,9 @@ export function calculateFee(entryTime: number, exitTime: number, isEvent?: bool
   const diffMs = exitTime - entryTime;
   const diffMinutes = Math.floor(diffMs / 60000);
   
-  if (diffMinutes < 30) {
-    return PARKING_CONFIG.firstHalfHourFlatRate;
-  }
+  if (diffMinutes <= 0) return 0;
   
   let total = diffMinutes * PARKING_CONFIG.pricePerMinute;
-  
-  // Ensure minimum is the first half hour flat rate if it goes over 30 mins but somehow is less (which based on 33.3 * 30 = 999 < 1300, yes, it could be).
-  if (total < PARKING_CONFIG.firstHalfHourFlatRate) {
-    total = PARKING_CONFIG.firstHalfHourFlatRate;
-  }
   
   if (total > PARKING_CONFIG.maxFaresPerDay) {
     return PARKING_CONFIG.maxFaresPerDay;
@@ -41,3 +34,4 @@ export function calculateFee(entryTime: number, exitTime: number, isEvent?: bool
   
   return Math.round(total);
 }
+
