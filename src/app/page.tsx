@@ -124,7 +124,8 @@ export default function ParkingMVP() {
       const formData = new FormData();
       formData.append("image", blob, "capture.jpg");
 
-      const response = await fetch("/api/detect", {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+      const response = await fetch(`${apiUrl}/detect`, {
         method: "POST",
         body: formData
       });
