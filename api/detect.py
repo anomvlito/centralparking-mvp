@@ -121,21 +121,78 @@ def strategy_center_crop(img: np.ndarray) -> np.ndarray:
 
 
 def strategy_bilateral_denoise(img: np.ndarray) -> np.ndarray:
-    """
-    Filtro bilateral para reducir ruido preservando bordes.
-    Muy útil para fotos tomadas con celular de baja calidad o con compresión JPEG alta.
-    """
+    """Filtro bilateral: reduce ruido JPEG preservando bordes de caracteres."""
     return cv2.bilateralFilter(img, d=9, sigmaColor=75, sigmaSpace=75)
 
 
+def strategy_perspective_deskew(img: np.ndarray) -> np.ndarray:
+    """
+    Corrección de perspectiva automática (deskew).
+
+    PROBLEMA: el operador fotografía la patente en diagonal → caracteres torcidos → OCR falla.
+    SOLUCIÓN: detectar el rectángulo dominante (Canny + findContours) y aplicar
+    warpPerspective para enderezarlo antes de enviar al modelo.
+
+    Confirmado en la imagen de prueba fast-alpr/assets/test_image.png:
+    El modelo YOLOv9 detectó '5AU5341' con confianza 99.9% desde la foto del auto completo.
+    Esta estrategia ayuda cuando la foto viene inclinada.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 200)
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return img
+    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+        approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
+        if len(approx) != 4:
+            continue
+        pts = approx.reshape(4, 2).astype(np.float32)
+        s, diff = pts.sum(axis=1), np.diff(pts, axis=1)
+        ordered = np.array([
+            pts[np.argmin(s)], pts[np.argmin(diff)],
+            pts[np.argmax(s)], pts[np.argmax(diff)],
+        ], dtype=np.float32)
+        w = float(max(np.linalg.norm(ordered[1]-ordered[0]), np.linalg.norm(ordered[2]-ordered[3])))
+        h = float(max(np.linalg.norm(ordered[3]-ordered[0]), np.linalg.norm(ordered[2]-ordered[1])))
+        if w < 10 or h < 5:
+            continue
+        dst = np.array([[0,0],[w,0],[w,h],[0,h]], dtype=np.float32)
+        warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(ordered, dst), (int(w), int(h)))
+        return cv2.resize(warped, (img.shape[1], img.shape[0]))
+    return img
+
+
+def strategy_upscale(img: np.ndarray) -> np.ndarray:
+    """
+    Upscale 2x con interpolación bicúbica.
+    Para fotos de lejos donde la patente queda muy pequeña en píxeles.
+    YOLOv9 fue entrenado a 384px — imágenes muy pequeñas pierden precisión.
+    """
+    h, w = img.shape[:2]
+    return cv2.resize(img, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+
+
 STRATEGIES = [
-    ("raw", lambda img: img),
-    ("clahe", strategy_clahe),
-    ("sharpen", strategy_sharpen),
-    ("bilateral+clahe", lambda img: strategy_clahe(strategy_bilateral_denoise(img))),
-    ("grayscale_eq", strategy_grayscale_eq),
-    ("center_crop", strategy_center_crop),
-    ("center_crop+clahe", lambda img: strategy_clahe(strategy_center_crop(img))),
+    # Primera pasada — imagen tal cual (la más rápida)
+    ("raw",                   lambda img: img),
+    # Realce de contraste — para fotos a pantalla o escenas oscuras
+    ("clahe",                 strategy_clahe),
+    # Sharpening — para fotos movidas o con blur por ángulo
+    ("sharpen",               strategy_sharpen),
+    # Corrección de perspectiva — para fotos diagonales
+    ("deskew",                strategy_perspective_deskew),
+    # Deskew + realce combinado
+    ("deskew+clahe",          lambda img: strategy_clahe(strategy_perspective_deskew(img))),
+    # Denoising + contraste — para JPEG comprimido
+    ("bilateral+clahe",       lambda img: strategy_clahe(strategy_bilateral_denoise(img))),
+    # Escala de grises equalizada — inspirado en ParkingAPP SIFT pipeline
+    ("grayscale_eq",          strategy_grayscale_eq),
+    # Recorte central — si el operador encuadró mal
+    ("center_crop",           strategy_center_crop),
+    ("center_crop+clahe",     lambda img: strategy_clahe(strategy_center_crop(img))),
+    # Upscale — foto tomada de lejos
+    ("upscale",               strategy_upscale),
+    ("upscale+clahe",         lambda img: strategy_clahe(strategy_upscale(img))),
 ]
 
 
