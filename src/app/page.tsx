@@ -35,9 +35,9 @@ export default function ParkingMVP() {
     try {
       const api = process.env.NEXT_PUBLIC_API_URL || "/api";
       const [c, s, h] = await Promise.all([
-        fetch(`${api}/cars`),
-        fetch(`${api}/stats`),
-        fetch(`${api}/history`)
+        fetch(`${api}/cars?t=${Date.now()}`),
+        fetch(`${api}/stats?t=${Date.now()}`),
+        fetch(`${api}/history?t=${Date.now()}`)
       ]);
       if (c.ok) setCars(await c.json());
       if (s.ok) setStats(await s.json());
