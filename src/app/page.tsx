@@ -165,7 +165,9 @@ export default function ParkingMVP() {
         </div>
       </header>
 
-      <main className="max-w-md mx-auto p-4 space-y-6 mt-4">
+      <main className="max-w-5xl mx-auto p-4 mt-4 lg:grid lg:grid-cols-12 lg:gap-8 items-start">
+        {/* Left Column (Actions) */}
+        <div className="lg:col-span-7 space-y-6">
 
         {actionResult && (
           <div className={`animate-in fade-in slide-in-from-top-4 p-4 rounded-2xl border backdrop-blur-md flex items-start gap-4 shadow-2xl ${actionResult.action === 'entered' ? 'bg-emerald-500/10 border-emerald-500/50' : 'bg-indigo-500/10 border-indigo-500/50'}`}>
@@ -270,7 +272,7 @@ export default function ParkingMVP() {
               ))}
             </ul>
           )}
-        </section>
+        </div>
       </main>
 
       {isCameraOpen && (
