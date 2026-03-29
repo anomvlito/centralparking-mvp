@@ -61,9 +61,10 @@ async def get_history():
     rows = []
     with open(HISTORY_FILE, mode='r') as f:
         reader = csv.reader(f)
+        next(reader, None) # Skip header
         for row in reader:
             if row: rows.append(row)
-    return rows[-50:][::-1] # Last 50 entries, reversed
+    return rows[-50:][::-1]
 
 @app.get("/api/stats")
 async def get_stats():
