@@ -1,6 +1,2 @@
-fast-alpr
-opencv-python-headless
-onnxruntime
-Pillow
 fastapi
 python-multipart
