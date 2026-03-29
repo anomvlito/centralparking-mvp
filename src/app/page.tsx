@@ -62,6 +62,16 @@ export default function ParkingMVP() {
     localStorage.setItem("theme", newTheme ? "dark" : "light");
   };
 
+  const handleManualEntry = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualPlate) return;
+    const cleanPlate = manualPlate.toUpperCase().trim();
+    processPlate(cleanPlate, cameraMode);
+    setShowManualInput(false);
+    setManualPlate("");
+  };
+
+
   const processPlate = async (plateNumber: string, mode: "entry" | "exit") => {
     const now = Date.now();
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
