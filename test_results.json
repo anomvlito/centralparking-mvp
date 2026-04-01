@@ -1,0 +1,26 @@
+[
+  {
+    "plate": "5AU5341",
+    "confidence": 0.9997858822345733,
+    "strategy": "raw",
+    "time_s": 0.6161344051361084,
+    "source": "local",
+    "description": "\u0160koda (vista trasera, patente checa) \u2014 foto de auto completo"
+  },
+  {
+    "plate": "VVFV",
+    "confidence": 0.5999084651470185,
+    "strategy": "bilateral+clahe",
+    "time_s": 1.9121339321136475,
+    "source": "local",
+    "description": "Estacionamiento a\u00e9reo \u2014 m\u00faltiples autos"
+  },
+  {
+    "plate": "9210537846",
+    "confidence": 0.9827390670776367,
+    "strategy": "raw",
+    "time_s": 0.24528050422668457,
+    "source": "local",
+    "description": "Imagen extra ParkingAPP"
+  }
+]

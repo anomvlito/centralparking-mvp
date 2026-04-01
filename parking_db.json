@@ -11,18 +11,6 @@
     "isEvent": false,
     "eventFee": null
   },
-  "BKJY33": {
-    "plate": "BKJY33",
-    "entryTime": 1774802572365.422,
-    "isEvent": false,
-    "eventFee": null
-  },
-  "BBBB10": {
-    "plate": "BBBB10",
-    "entryTime": 1774802586671.042,
-    "isEvent": false,
-    "eventFee": null
-  },
   "GTBC25": {
     "plate": "GTBC25",
     "entryTime": 1774802604550.116,
@@ -38,6 +26,36 @@
   "BCBB60": {
     "plate": "BCBB60",
     "entryTime": 1774802625675.363,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "GWKG64": {
+    "plate": "GWKG64",
+    "entryTime": 1774803626914.1208,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "KAB0813": {
+    "plate": "KAB0813",
+    "entryTime": 1774803724280.8489,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "BBBB10": {
+    "plate": "BBBB10",
+    "entryTime": 1774803739443.2148,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "5BZ7971": {
+    "plate": "5BZ7971",
+    "entryTime": 1774803823210.469,
+    "isEvent": false,
+    "eventFee": null
+  },
+  "6AT4838": {
+    "plate": "6AT4838",
+    "entryTime": 1774806561335.851,
     "isEvent": false,
     "eventFee": null
   }
