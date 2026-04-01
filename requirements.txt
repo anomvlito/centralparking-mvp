@@ -1,2 +1,5 @@
 fastapi
+opencv-python-headless
+numpy
 python-multipart
+fast-alpr
