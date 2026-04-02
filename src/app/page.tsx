@@ -33,7 +33,7 @@ export default function ParkingMVP() {
 
   const fetchData = async () => {
     try {
-      const api = process.env.NEXT_PUBLIC_API_URL || "/api";
+      const api = "/api";
       const ts = Date.now();
       const [c, s, h] = await Promise.all([
         fetch(`${api}/cars?t=${ts}`),
@@ -62,7 +62,7 @@ export default function ParkingMVP() {
   };
 
   const processPlate = async (p: string, mode: "entry" | "exit") => {
-    const api = process.env.NEXT_PUBLIC_API_URL || "/api";
+    const api = "/api";
     const cleaned = p.toUpperCase().replace(/[^A-Z0-9]/g, '');
     try {
       if (mode === "entry") {
@@ -98,7 +98,7 @@ export default function ParkingMVP() {
       const blob = await (await fetch(img)).blob();
       const fd = new FormData();
       fd.append("image", blob, 'p.jpg');
-      const api = process.env.NEXT_PUBLIC_API_URL || "/api";
+      const api = "/api";
       const res = await fetch(`${api}/detect`, { method: "POST", body: fd });
       const data = await res.json();
       if (data.plate && data.plate !== "None") processPlate(data.plate, cameraMode);
@@ -112,7 +112,7 @@ export default function ParkingMVP() {
 
   const clearRecords = async () => {
     if (!confirm("Borrar historial?")) return;
-    const api = process.env.NEXT_PUBLIC_API_URL || "/api";
+    const api = "/api";
     await fetch(`${api}/clear-history`, { method: "POST" });
     fetchData();
   };
@@ -219,7 +219,7 @@ export default function ParkingMVP() {
                        <span className="font-black text-2xl sm:text-3xl font-mono tracking-tight underline decoration-indigo-600 decoration-2 underline-offset-8 truncate">{c.plate}</span>
                        <div className="flex items-center gap-1 shrink-0">
                           <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${c.isEvent ? 'bg-purple-600' : 'bg-indigo-600'} text-white shadow-lg shadow-indigo-500/10`}>{c.isEvent ? 'Ev' : 'Nm'}</span>
-                          <button onClick={() => { if(confirm(`Eliminar ${c.plate}?`)) fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/cars/${c.plate}`, {method: 'DELETE'}).then(fetchData) }} className="p-2 text-red-500/30 hover:text-red-500 transition-all"><Trash2 size={16}/></button>
+                          <button onClick={() => { if(confirm(`Eliminar ${c.plate}?`)) fetch(`/api/cars/${c.plate}`, {method: 'DELETE'}).then(fetchData) }} className="p-2 text-red-500/30 hover:text-red-500 transition-all"><Trash2 size={16}/></button>
                        </div>
                     </div>
                     
