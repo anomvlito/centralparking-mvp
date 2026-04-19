@@ -41,6 +41,14 @@ El corazón del sistema se basa en la excelencia técnica de la comunidad de có
 *   **Historial CSV Navegable:** Un log detallado de cada movimiento (Entrada, Salida, Anulación) que se lee directamente del archivo `history.csv` local.
 *   **Limpieza Administrativa:** Función para borrar el historial del día con un solo clic, permitiendo reiniciar la operación administrativa sin afectar los autos vigilados actualmente.
 
+### 🎥 Procesamiento de Video Offline (Auditoría Batch)
+*   **Lectura de archivos CCTV:** Interfaz para cargar grabaciones en video (MP4, AVI, MOV).
+*   **Mecanismo "Anti-Fatiga" de IA (3-Tiered Filtering):**
+    *   **Skip-Frames:** Solo se procesa 1 cada 10 cuadros, optimizando la velocidad exponencialmente.
+    *   **Detección de Movimiento:** Un algoritmo evalúa con `BackgroundSubtractorMOG2` si algún objeto del tamaño de un auto se está moviendo. Si la escena es estática, se evita accionar la IA.
+    *   **Validación Cruzada:** Para evitar falsos positivos ("Patentes fantasma"), el motor debe observar la misma secuencia de letras de manera consistente durante al menos 2 validaciones previas antes de aceptarla como ingreso real.
+*   **Conciliación de Datos (Work In Progress):** Construído sobre la métrica de cruzar e invalidar patentes. Servirá próximamente para comparar los listados del cliente contra lo detectado por la IA.
+
 ---
 
 ## 💾 Persistencia de Datos
@@ -55,8 +63,9 @@ El sistema prioriza la redundancia y la simplicidad:
 ### Requisitos del Servidor Local
 1.  Python 3.10+
 2.  Dependencias: `fastapi`, `uvicorn`, `fast-alpr`, `opencv-python-headless`.
-3.  Comando de ejecución:
+3.  Comando de ejecución (Importante: Ejecutar desde la carpeta `centralparking-mvp`):
     ```bash
+    cd centralparking-mvp
     uvicorn api.detect:app --host 0.0.0.0 --port 8000 --reload
     ```
 
