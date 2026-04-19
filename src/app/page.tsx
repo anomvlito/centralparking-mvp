@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Webcam from "react-webcam";
-import { Search, LogOut, LogIn, X, Check, Car, Sun, Moon, Trash2, Activity, ListOrdered, Clock, RefreshCw, Eraser } from "lucide-react";
+import { Search, LogOut, LogIn, X, Check, Car, Sun, Moon, Trash2, Activity, ListOrdered, Clock, RefreshCw, Eraser, Video, UploadCloud, FileSpreadsheet } from "lucide-react";
 import { format } from "date-fns";
 import { type ParkedCar, calculateFee } from "../lib/parking";
 
@@ -18,9 +18,12 @@ export default function ParkingMVP() {
   const [history, setHistory] = useState<any[]>([]);
   const [stats, setStats] = useState({ today_income: 0, today_entries: 0, today_exits: 0, parked_now: 0 });
   const [selectedEvent, setSelectedEvent] = useState(EVENT_FEES[0]);
-  const [activeTab, setActiveTab] = useState<"actions" | "monitor" | "stats">("actions");
+  const [activeTab, setActiveTab] = useState<"actions" | "monitor" | "video" | "stats">("actions");
   
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [processingVideoId, setProcessingVideoId] = useState<string | null>(null);
+  const [videoResults, setVideoResults] = useState<any[]>([]);
   const [cameraMode, setCameraMode] = useState<"entry" | "exit">("entry");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [manualPlate, setManualPlate] = useState("");
@@ -117,6 +120,49 @@ export default function ParkingMVP() {
     fetchData();
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fd = new FormData();
+    fd.append("file", file);
+    setUploading(true);
+    setVideoResults([]);
+    try {
+      const res = await fetch("/api/video/upload", { method: "POST", body: fd });
+      if (!res.ok) throw new Error("Upload failed");
+      const data = await res.json();
+      if (data.video_id) {
+        setProcessingVideoId(data.video_id);
+        pollVideo(data.video_id);
+      }
+    } catch(e) {
+      alert("Error procesando video. Asegúrate de que el backend local esté corriendo.");
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const pollVideo = async (videoId: string) => {
+    try {
+      const res = await fetch(`/api/video/results/${videoId}`);
+      if (!res.ok) {
+        setTimeout(() => pollVideo(videoId), 3000);
+        return;
+      }
+      const data = await res.json();
+      if (data.status === "completed") {
+        setVideoResults(data.data);
+        setProcessingVideoId(null);
+      } else {
+        setTimeout(() => pollVideo(videoId), 3000);
+      }
+    } catch(e) {
+      setTimeout(() => pollVideo(videoId), 3000);
+    }
+  };
+
   return (
     <div className={`min-h-screen selection:bg-indigo-500 selection:text-white transition-colors duration-300 font-sans ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
       
@@ -128,9 +174,9 @@ export default function ParkingMVP() {
         </div>
         
         <nav className="flex bg-black/10 dark:bg-white/5 p-1 rounded-xl border border-white/5 shrink-0 overflow-hidden">
-           {["actions", "monitor", "stats"].map(t => (
+           {["actions", "monitor", "video", "stats"].map(t => (
              <button key={t} onClick={() => setActiveTab(t as any)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all whitespace-nowrap ${activeTab === t ? 'bg-indigo-600 text-white shadow-md' : 'opacity-40 hover:opacity-100'}`}>
-               {t === 'actions' ? 'Control' : t === 'monitor' ? 'Mapa' : 'Cierre'}
+               {t === 'actions' ? 'Control' : t === 'monitor' ? 'Mapa' : t === 'video' ? 'Videos' : 'Cierre'}
              </button>
            ))}
         </nav>
@@ -250,6 +296,56 @@ export default function ParkingMVP() {
                   </div>
                 );
               })}
+           </div>
+        )}
+
+        {activeTab === "video" && (
+           <div className="space-y-8 animate-in slide-in-from-bottom-4 pb-20 overflow-visible">
+              <div className={`p-8 rounded-[2.5rem] border-2 text-center transition-all shadow-xl ${isDarkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'}`}>
+                 <input type="file" id="video-upload" accept="video/mp4,video/x-m4v,video/*,video/avi" className="hidden" onChange={handleFileUpload} disabled={uploading || !!processingVideoId} />
+                 
+                 {processingVideoId ? (
+                   <div className="flex flex-col items-center gap-6 py-6">
+                     <RefreshCw size={48} className="text-indigo-500 animate-spin" />
+                     <div>
+                       <h3 className="font-black text-xl mb-2">Procesando Video</h3>
+                       <p className="text-xs font-bold uppercase tracking-widest opacity-40">Extrayendo patentes con IA local...</p>
+                     </div>
+                   </div>
+                 ) : (
+                   <label htmlFor="video-upload" className={`cursor-pointer flex flex-col items-center gap-6 py-10 transition-all ${uploading ? 'opacity-50' : 'hover:scale-105 active:scale-95'}`}>
+                      <div className="w-24 h-24 rounded-full bg-indigo-500/10 text-indigo-500 flex items-center justify-center">
+                         {uploading ? <RefreshCw size={40} className="animate-spin" /> : <UploadCloud size={40} />}
+                      </div>
+                      <div>
+                        <h3 className="font-black text-xl mb-2">Subir Video CCTV</h3>
+                        <p className="text-xs font-bold uppercase tracking-widest opacity-40 text-indigo-500">MP4, AVI, MOV (Procesamiento Batch)</p>
+                      </div>
+                   </label>
+                 )}
+              </div>
+
+              {videoResults.length > 0 && (
+                <div className="space-y-4">
+                   <div className="flex items-center gap-2 opacity-40 px-2">
+                     <FileSpreadsheet size={16} />
+                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em]">Resultados Extraídos</h3>
+                   </div>
+                   <div className="space-y-3">
+                     {videoResults.map((r, i) => (
+                        <div key={i} className={`p-5 rounded-2xl border flex items-center justify-between gap-4 ${isDarkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-100 shadow-sm'}`}>
+                           <div className="flex items-center gap-4">
+                              <span className="text-[10px] font-bold opacity-30 font-mono tracking-widest">{r.Timestamp?.split(' ')[1] || '00:00'}</span>
+                              <span className="text-xl font-black font-mono tracking-widest">{r.Plate}</span>
+                           </div>
+                           <div className="px-3 py-1 rounded-lg bg-emerald-500/10 text-emerald-500 text-[8px] font-black uppercase tracking-widest">
+                             {parseFloat(r.Confidence || '0').toFixed(2)} conf
+                           </div>
+                        </div>
+                     ))}
+                   </div>
+                </div>
+              )}
            </div>
         )}
 
