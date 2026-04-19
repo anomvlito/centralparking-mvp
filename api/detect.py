@@ -26,11 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 
-from .video_processor import router as video_router
-
 app = FastAPI(title="CParking AI Backend", version="2.0")
-
-app.include_router(video_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -388,3 +384,8 @@ async def delete_car(plate: str):
         save_db(db)
         log_to_csv(plate, "VOID")
     return {"status": "voided"}
+
+# Register video processor at the end to avoid circular imports
+from .video_processor import router as video_router
+app.include_router(video_router)
+
