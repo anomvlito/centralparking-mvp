@@ -13,7 +13,9 @@ const EVENT_FEES = [
   { id: "event_10k", name: "VIP", amount: 10000 },
 ];
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/api\/?$/, "");
+const API_BASE = process.env.NEXT_PUBLIC_API_URL 
+  ? process.env.NEXT_PUBLIC_API_URL.replace(/\/api\/?$/, "") 
+  : "http://127.0.0.1:8000";
 
 export default function ParkingMVP() {
   const [cars, setCars] = useState<Record<string, ParkedCar>>({});
