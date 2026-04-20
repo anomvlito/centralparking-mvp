@@ -57,7 +57,13 @@ export default function ParkingMVP() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 2000);
+    // Intelligent Background Polling (15 seconds, only if tab is visible)
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        fetchData();
+      }
+    }, 15000);
+    
     if (localStorage.getItem("theme") === "light") setIsDarkMode(false);
     return () => clearInterval(interval);
   }, []);
