@@ -28,6 +28,7 @@ export default function ParkingMVP() {
   const [uploading, setUploading] = useState(false);
   const [processingVideoId, setProcessingVideoId] = useState<string | null>(null);
   const [videoResults, setVideoResults] = useState<any[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const [cameraMode, setCameraMode] = useState<"entry" | "exit">("entry");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [manualPlate, setManualPlate] = useState("");
@@ -120,10 +121,7 @@ export default function ParkingMVP() {
     fetchData();
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const uploadVideoFile = async (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
     setUploading(true);
@@ -140,7 +138,35 @@ export default function ParkingMVP() {
       alert("Error procesando video. Asegúrate de que el backend local esté corriendo.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await uploadVideoFile(file);
       e.target.value = '';
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!uploading && !processingVideoId) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (!uploading && !processingVideoId) {
+      const file = e.dataTransfer.files?.[0];
+      if (file) {
+        uploadVideoFile(file);
+      }
     }
   };
 
@@ -301,7 +327,12 @@ export default function ParkingMVP() {
 
         {activeTab === "video" && (
            <div className="space-y-8 animate-in slide-in-from-bottom-4 pb-20 overflow-visible">
-              <div className={`p-8 rounded-[2.5rem] border-2 text-center transition-all shadow-xl ${isDarkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'}`}>
+              <div 
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`p-8 rounded-[2.5rem] border-4 border-dashed text-center transition-all shadow-xl ${isDarkMode ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'} ${isDragging ? 'border-indigo-500 bg-indigo-500/10 scale-105' : ''}`}
+              >
                  <input type="file" id="video-upload" accept="video/mp4,video/x-m4v,video/*,video/avi" className="hidden" onChange={handleFileUpload} disabled={uploading || !!processingVideoId} />
                  
                  {processingVideoId ? (
