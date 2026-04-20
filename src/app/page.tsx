@@ -13,6 +13,8 @@ const EVENT_FEES = [
   { id: "event_10k", name: "VIP", amount: 10000 },
 ];
 
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/api\/?$/, "");
+
 export default function ParkingMVP() {
   const [cars, setCars] = useState<Record<string, ParkedCar>>({});
   const [history, setHistory] = useState<any[]>([]);
@@ -36,12 +38,11 @@ export default function ParkingMVP() {
 
   const fetchData = async () => {
     try {
-      const api = "/api";
       const ts = Date.now();
       const [c, s, h] = await Promise.all([
-        fetch(`${api}/cars?t=${ts}`),
-        fetch(`${api}/stats?t=${ts}`),
-        fetch(`${api}/history?t=${ts}`)
+        fetch(`${API_BASE}/api/cars?t=${ts}`),
+        fetch(`${API_BASE}/api/stats?t=${ts}`),
+        fetch(`${API_BASE}/api/history?t=${ts}`)
       ]);
       if (c.ok) setCars(await c.json());
       if (s.ok) setStats(await s.json());
@@ -65,12 +66,11 @@ export default function ParkingMVP() {
   };
 
   const processPlate = async (p: string, mode: "entry" | "exit") => {
-    const api = "/api";
     const cleaned = p.toUpperCase().replace(/[^A-Z0-9]/g, '');
     try {
       if (mode === "entry") {
         if (cars[cleaned]) { alert("Ya registrado"); return; }
-        await fetch(`${api}/entry`, {
+        await fetch(`${API_BASE}/api/entry`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ plate: cleaned, isEvent: selectedEvent.amount !== null, eventFee: selectedEvent.amount })
@@ -80,7 +80,7 @@ export default function ParkingMVP() {
         const car = cars[cleaned];
         if (!car) { alert("Auto no encontrado"); return; }
         const fee = calculateFee(car.entryTime, Date.now(), car.isEvent, car.eventFee);
-        await fetch(`${api}/exit/${cleaned}?fee=${fee}`, { method: "POST" });
+        await fetch(`${API_BASE}/api/exit/${cleaned}?fee=${fee}`, { method: "POST" });
         setActionResult({ plate: cleaned, action: "salida", fee });
       }
       fetchData();
@@ -101,8 +101,7 @@ export default function ParkingMVP() {
       const blob = await (await fetch(img)).blob();
       const fd = new FormData();
       fd.append("image", blob, 'p.jpg');
-      const api = "/api";
-      const res = await fetch(`${api}/detect`, { method: "POST", body: fd });
+      const res = await fetch(`${API_BASE}/api/detect`, { method: "POST", body: fd });
       const data = await res.json();
       if (data.plate && data.plate !== "None") processPlate(data.plate, cameraMode);
       else alert("No detectado");
@@ -115,8 +114,7 @@ export default function ParkingMVP() {
 
   const clearRecords = async () => {
     if (!confirm("Borrar historial?")) return;
-    const api = "/api";
-    await fetch(`${api}/clear-history`, { method: "POST" });
+    await fetch(`${API_BASE}/api/clear-history`, { method: "POST" });
     fetchData();
   };
 
@@ -129,7 +127,7 @@ export default function ParkingMVP() {
     setUploading(true);
     setVideoResults([]);
     try {
-      const res = await fetch("/api/video/upload", { method: "POST", body: fd });
+      const res = await fetch(`${API_BASE}/api/video/upload`, { method: "POST", body: fd });
       if (!res.ok) throw new Error("Upload failed");
       const data = await res.json();
       if (data.video_id) {
@@ -146,7 +144,7 @@ export default function ParkingMVP() {
 
   const pollVideo = async (videoId: string) => {
     try {
-      const res = await fetch(`/api/video/results/${videoId}`);
+      const res = await fetch(`${API_BASE}/api/video/results/${videoId}`);
       if (!res.ok) {
         setTimeout(() => pollVideo(videoId), 3000);
         return;
@@ -265,7 +263,7 @@ export default function ParkingMVP() {
                        <span className="font-black text-2xl sm:text-3xl font-mono tracking-tight underline decoration-indigo-600 decoration-2 underline-offset-8 truncate">{c.plate}</span>
                        <div className="flex items-center gap-1 shrink-0">
                           <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${c.isEvent ? 'bg-purple-600' : 'bg-indigo-600'} text-white shadow-lg shadow-indigo-500/10`}>{c.isEvent ? 'Ev' : 'Nm'}</span>
-                          <button onClick={() => { if(confirm(`Eliminar ${c.plate}?`)) fetch(`/api/cars/${c.plate}`, {method: 'DELETE'}).then(fetchData) }} className="p-2 text-red-500/30 hover:text-red-500 transition-all"><Trash2 size={16}/></button>
+                          <button onClick={() => { if(confirm(`Eliminar ${c.plate}?`)) fetch(`${API_BASE}/api/cars/${c.plate}`, {method: 'DELETE'}).then(fetchData) }} className="p-2 text-red-500/30 hover:text-red-500 transition-all"><Trash2 size={16}/></button>
                        </div>
                     </div>
                     
