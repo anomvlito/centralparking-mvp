@@ -13,9 +13,12 @@ const EVENT_FEES = [
   { id: "event_10k", name: "VIP", amount: 10000 },
 ];
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL 
-  ? process.env.NEXT_PUBLIC_API_URL.replace(/\/api\/?$/, "") 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL
+  ? process.env.NEXT_PUBLIC_API_URL.replace(/\/api\/?$/, "")
   : "http://127.0.0.1:8000";
+
+// Video uploads bypass Vercel (4.5MB limit) and go directly to the HTTPS backend
+const VIDEO_BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? API_BASE;
 
 export default function ParkingMVP() {
   const [cars, setCars] = useState<Record<string, ParkedCar>>({});
@@ -133,7 +136,7 @@ export default function ParkingMVP() {
     setUploading(true);
     setVideoResults([]);
     try {
-      const res = await fetch(`${API_BASE}/api/video/upload`, { method: "POST", body: fd });
+      const res = await fetch(`${VIDEO_BASE}/api/video/upload`, { method: "POST", body: fd });
       if (!res.ok) throw new Error("Upload failed");
       const data = await res.json();
       if (data.video_id) {
