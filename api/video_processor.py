@@ -3,6 +3,7 @@ import cv2
 import csv
 import datetime
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
+from api.database import now_cl
 from typing import Dict, List, Optional
 import shutil
 
@@ -27,14 +28,14 @@ def _process_video_task(video_path: str, result_csv_path: str):
     and run the optimized ALPR pipeline.
     """
     if not HAS_ML:
-        print("⚠️ MLA not available. Cannot process video.")
+        print("video skipped: AI offline")
         return
 
-    print(f"🎬 Starting video processing: {video_path}")
+    print(f"video start: {video_path}")
     cap = cv2.VideoCapture(video_path)
     
     if not cap.isOpened():
-        print(f"❌ Error opening video file: {video_path}")
+        print(f"video error: cannot open {video_path}")
         return
 
     frame_count = 0
@@ -81,9 +82,9 @@ def _process_video_task(video_path: str, result_csv_path: str):
 
                 # If we've seen this plate enough times, log it
                 if recent_plates_buffer[plate_text] == CONSECUTIVE_FRAMES_FOR_CONFIRMATION:
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    timestamp = now_cl().strftime("%Y-%m-%d %H:%M:%S")
                     detected_plates_history.append([timestamp, plate_text, f"{confidence:.2f}"])
-                    print(f"🚗 Validated Plate from Video: {plate_text} (Conf: {confidence:.2f})")
+                    print(f"video detection: {plate_text} conf={confidence:.2f}")
             else:
                 # Decay the buffer if no plate found (helps "forget" ghost reads)
                 for key in list(recent_plates_buffer.keys()):
@@ -93,7 +94,7 @@ def _process_video_task(video_path: str, result_csv_path: str):
             print(f"Error processing frame {frame_count}: {e}")
 
     cap.release()
-    print(f"🏁 Finished processing video. Detected {len(detected_plates_history)} unique plate events.")
+    print(f"video done: {len(detected_plates_history)} plates detected")
 
     # Write results to CSV
     with open(result_csv_path, mode='w', newline='') as f:
@@ -101,7 +102,7 @@ def _process_video_task(video_path: str, result_csv_path: str):
         writer.writerow(["Timestamp", "Plate", "Confidence"])
         writer.writerows(detected_plates_history)
         
-    print(f"💾 Results saved to: {result_csv_path}")
+    print(f"video results: {result_csv_path}")
 
 
 @router.post("/api/video/upload")
@@ -112,7 +113,7 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     if not file.filename.endswith(('.mp4', '.avi', '.mov')):
         raise HTTPException(status_code=400, detail="Invalid video format.")
 
-    timestamp = datetime.datetime.now().strftime("%Y%md_%H%M%S")
+    timestamp = now_cl().strftime("%Y%md_%H%M%S")
     safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
     
     video_path = os.path.join(VIDEO_UPLOAD_DIR, safe_filename)

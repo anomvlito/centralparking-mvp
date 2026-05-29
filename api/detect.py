@@ -14,7 +14,6 @@ Estrategias de detección (en orden de prioridad):
   5. Cropped Center     - recorte del 60% central (útil cuando el viewfinder no está bien centrado)
 """
 
-import json
 import os
 import datetime
 import random
@@ -26,6 +25,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 
+from api.database import (
+    init_db, load_db, upsert_vehicle, remove_vehicle, vehicle_exists,
+    log_to_db as log_to_csv, get_history, get_stats_today, clear_history, now_cl,
+)
+
 app = FastAPI(title="CParking AI Backend", version="2.0")
 
 app.add_middleware(
@@ -35,24 +39,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_FILE = "parking_db.json"
-HISTORY_FILE = "history.csv"
-
-# ─────────────────────────── Helpers de persistencia ────────────────────────
-
-def load_db():
-    if not os.path.exists(DB_FILE): return {}
-    with open(DB_FILE, 'r') as f: return json.load(f)
-
-def save_db(data):
-    with open(DB_FILE, 'w') as f: json.dump(data, f, indent=2)
-
-def log_to_csv(plate, action, status="REAL", fee=0, conf=1.0):
-    import csv
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(HISTORY_FILE, mode='a', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow([ts, plate, action, status, fee, f"{conf:.2f}"])
+init_db()
 
 # ─────────────────────────── Motor de IA ───────────────────────────────────
 
@@ -67,10 +54,9 @@ try:
         detector_conf_thresh=0.25,   # Umbral más bajo → detecta patentes más difíciles
     )
     HAS_ML = True
-    print("✅ AI Engine ONLINE — YOLOv9 + CCT-XS ONNX")
+    print("AI engine online — YOLOv9 + CCT-XS ONNX")
 except Exception as e:
-    print(f"⚠️  AI Engine OFFLINE: {e}")
-    print("   Modo simulado activado.")
+    print(f"AI engine offline: {e} — modo simulado activado")
 
 
 # ─────────────────────────── Pipeline de pre-procesamiento ─────────────────
@@ -196,10 +182,41 @@ STRATEGIES = [
 ]
 
 
+import re
+
+# ─────────────────────────── Validación de patentes ─────────────────────────
+
+_PLATE_PATTERNS = [
+    # Chile actual (2007-hoy): 4 letras + 2 dígitos — BBCC12
+    re.compile(r'^[A-Z]{4}\d{2}$'),
+    # Chile antiguo (1985-2007): 2 letras + 4 dígitos — AA1000
+    re.compile(r'^[A-Z]{2}\d{4}$'),
+    # Chile próximo (4+ ruedas): 5 letras + 1 dígito — BBBBB0
+    re.compile(r'^[A-Z]{5}\d{1}$'),
+    # Chile moto actual: 3 letras + 2 dígitos — BBB12
+    re.compile(r'^[A-Z]{3}\d{2}$'),
+    # Chile moto próximo: 4 letras + 1 dígito — BBBB0
+    re.compile(r'^[A-Z]{4}\d{1}$'),
+    # Argentina Mercosur (1994-hoy): 3 letras + 3 dígitos — ABC123
+    re.compile(r'^[A-Z]{3}\d{3}$'),
+    # Argentina nuevo Mercosur (2016-hoy): 2 letras + 3 dígitos + 2 letras — AB123CD
+    re.compile(r'^[A-Z]{2}\d{3}[A-Z]{2}$'),
+    # Perú: 3 letras + 3 dígitos — ABC123
+    re.compile(r'^[A-Z]{3}\d{3}$'),
+    # Bolivia: 3 letras + 3-4 dígitos — ABC1234
+    re.compile(r'^[A-Z]{3}\d{3,4}$'),
+]
+
+
+def is_valid_plate(text: str) -> bool:
+    """Valida que el texto leído calce con algún formato de patente conocido en la región."""
+    return any(p.match(text) for p in _PLATE_PATTERNS)
+
+
 def extract_best_plate(results, strategy_name: str) -> Optional[dict]:
     """
     Extrae el texto de patente con mayor confianza promedio de los resultados ALPR.
-    Lógica de confianza tomada directamente de fast-alpr/alpr.py (statistics.mean de char_probs).
+    Filtra lecturas que no calzan con formatos de patente chilenos o de países vecinos.
     """
     if not results:
         return None
@@ -211,7 +228,6 @@ def extract_best_plate(results, strategy_name: str) -> Optional[dict]:
         if r.ocr is None or not r.ocr.text:
             continue
 
-        # Confianza exacta como la calcula fast-alpr internamente
         conf_raw = r.ocr.confidence
         if isinstance(conf_raw, list) and conf_raw:
             conf = statistics.mean(conf_raw)
@@ -220,9 +236,9 @@ def extract_best_plate(results, strategy_name: str) -> Optional[dict]:
         else:
             conf = 0.0
 
-        # Limpieza básica: solo alfanumérico, mínimo 4 caracteres
         text = "".join(c for c in str(r.ocr.text).upper() if c.isalnum())
-        if len(text) < 4:
+
+        if not is_valid_plate(text):
             continue
 
         if conf > best_conf:
@@ -236,29 +252,48 @@ def extract_best_plate(results, strategy_name: str) -> Optional[dict]:
 
 def run_multi_strategy(img: np.ndarray) -> Optional[dict]:
     """
-    Ejecuta el pipeline de detección con todas las estrategias en orden.
-    Retorna el primer resultado válido encontrado.
-    Primera estrategia exitosa gana (fast path).
-    Si ninguna estrategia funciona, retorna None.
+    Votación por consenso: corre todas las estrategias, agrupa por texto de placa,
+    y elige la que más estrategias detectaron. Empates se resuelven por confianza promedio.
     """
+    candidates = []
     reports = []
+
     for name, fn in STRATEGIES:
         try:
             processed = fn(img)
             results = alpr.predict(processed)
             candidate = extract_best_plate(results, name)
             if candidate:
-                print(f"✅ Detectado con estrategia '{name}': {candidate['plate']} (conf={candidate['confidence']:.2f})")
-                return candidate
+                candidates.append(candidate)
             else:
-                reports.append(f"  ❌ '{name}': sin resultado")
+                pass
         except Exception as e:
-            reports.append(f"  💥 '{name}': error — {e}")
+            print(f"strategy {name} error: {e}")
 
-    print("⚠️  Sin detección en todas las estrategias:")
-    for r in reports:
-        print(r)
-    return None
+    if not candidates:
+        print("no_detection")
+        return None
+
+    votes: dict[str, list[dict]] = {}
+    for c in candidates:
+        votes.setdefault(c["plate"], []).append(c)
+
+    def score(plate_group):
+        group = votes[plate_group]
+        return (len(group), statistics.mean(c["confidence"] for c in group))
+
+    winner_plate = max(votes, key=score)
+    winner_group = votes[winner_plate]
+    best = max(winner_group, key=lambda c: c["confidence"])
+    avg_conf = statistics.mean(c["confidence"] for c in winner_group)
+
+    print(
+        f"detection: {best['plate']} "
+        f"votes={len(winner_group)}/{len(STRATEGIES)} "
+        f"conf_avg={avg_conf:.2f} conf_max={best['confidence']:.2f} "
+        f"strategy={best['strategy']}"
+    )
+    return best
 
 
 # ─────────────────────────── Modelos Pydantic ───────────────────────────────
@@ -276,45 +311,19 @@ async def get_cars():
 
 
 @app.get("/api/history")
-async def get_history():
-    import csv
-    if not os.path.exists(HISTORY_FILE): return []
-    rows = []
-    with open(HISTORY_FILE, mode='r') as f:
-        reader = csv.reader(f)
-        next(reader, None)  # Skip header
-        for row in reader:
-            if row: rows.append(row)
-    return rows[-50:][::-1]
+async def api_get_history():
+    return get_history(limit=50)
 
 
 @app.post("/api/clear-history")
-async def clear_history():
-    import csv
-    with open(HISTORY_FILE, mode='w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Timestamp", "Plate", "Action", "Status", "Fee", "Confidence"])
+async def api_clear_history():
+    clear_history()
     return {"status": "cleared"}
 
 
 @app.get("/api/stats")
 async def get_stats():
-    import csv
-    if not os.path.exists(HISTORY_FILE):
-        return {"today_income": 0, "today_entries": 0, "today_exits": 0, "parked_now": len(load_db())}
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    income, entries, exits = 0, 0, 0
-    with open(HISTORY_FILE, mode='r') as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if len(row) < 3 or not row[0].startswith(today): continue
-            if row[2] == "ENTRY": entries += 1
-            elif row[2] == "EXIT":
-                exits += 1
-                try: income += float(row[4])
-                except: pass
-    return {"today_income": income, "today_entries": entries, "today_exits": exits, "parked_now": len(load_db())}
+    return get_stats_today()
 
 
 @app.post("/api/detect")
@@ -353,39 +362,32 @@ async def detect(image: UploadFile = File(...)):
 
 @app.post("/api/entry")
 async def entry(e: CarEntry):
-    db = load_db()
-    db[e.plate] = {
-        "plate": e.plate,
-        "entryTime": datetime.datetime.now().timestamp() * 1000,
-        "isEvent": e.isEvent,
-        "eventFee": e.eventFee,
-    }
-    save_db(db)
+    entry_time = now_cl().timestamp() * 1000
+    upsert_vehicle(e.plate, entry_time, e.isEvent, e.eventFee)
     log_to_csv(e.plate, "ENTRY")
-    return db[e.plate]
+    return {"plate": e.plate, "entryTime": entry_time, "isEvent": e.isEvent, "eventFee": e.eventFee}
 
 
 @app.post("/api/exit/{plate}")
 async def exit_car(plate: str, fee: float = 0):
-    db = load_db()
-    if plate in db:
-        db.pop(plate)
-        save_db(db)
-        log_to_csv(plate, "EXIT", fee=fee)
-        return {"status": "ok"}
-    raise HTTPException(status_code=404, detail="Plate not in parking")
+    if not vehicle_exists(plate):
+        raise HTTPException(status_code=404, detail="Plate not in parking")
+    remove_vehicle(plate)
+    log_to_csv(plate, "EXIT", fee=fee)
+    return {"status": "ok"}
 
 
 @app.delete("/api/cars/{plate}")
 async def delete_car(plate: str):
-    db = load_db()
-    if plate in db:
-        del db[plate]
-        save_db(db)
-        log_to_csv(plate, "VOID")
+    remove_vehicle(plate)
+    log_to_csv(plate, "VOID")
     return {"status": "voided"}
 
 # Register video processor at the end to avoid circular imports
 from .video_processor import router as video_router
 app.include_router(video_router)
+
+# Register FTP handler (nuevos endpoints, no modifica los existentes)
+from .ftp_handler import router as ftp_router
+app.include_router(ftp_router)
 
