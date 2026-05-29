@@ -40,3 +40,22 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Videos y resultados generados (nunca subir al repo)
+uploaded_videos/
+video_results/
+
+# Base de datos SQLite (runtime data)
+*.db
+*.db-shm
+*.db-wal
+
+# Datos runtime (se regeneran)
+parking_db.json
+history.csv
+ftp_events.json
