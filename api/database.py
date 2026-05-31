@@ -155,22 +155,21 @@ def vehicle_exists(plate: str) -> bool:
 # ─────────────────────── log / historial ────────────────────────────────────
 
 def log_to_db(plate: str, action: str, status: str = "REAL",
-              fee: float = 0, conf: float = 1.0):
+              fee: float = 0, conf: float = 1.0, image_path: str = None):
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO detection_log (plate, action, status, fee, confidence)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (plate, action, status, fee, conf))
+                INSERT INTO detection_log (plate, action, status, fee, confidence, image_path)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (plate, action, status, fee, conf, image_path))
 
 
 def get_history(limit: int = 200) -> list:
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT logged_at  AS timestamp,
-                       plate, action, status,
-                       fee, confidence
+                SELECT logged_at AS timestamp, plate, action, status,
+                       fee, confidence, image_path
                 FROM detection_log
                 ORDER BY logged_at DESC
                 LIMIT %s
@@ -178,14 +177,16 @@ def get_history(limit: int = 200) -> list:
             rows = cur.fetchall()
     result = []
     for r in rows:
-        result.append({
+        entry = {
             "timestamp":  r["timestamp"].strftime("%Y-%m-%d %H:%M:%S"),
             "plate":      r["plate"],
             "action":     r["action"],
             "status":     r["status"],
             "fee":        float(r["fee"]),
             "confidence": float(r["confidence"]),
-        })
+            "image_url":  f"/api/monitor/file/{r['image_path']}" if r["image_path"] else None,
+        }
+        result.append(entry)
     return result
 
 

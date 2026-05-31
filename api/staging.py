@@ -157,7 +157,7 @@ def staging_promote_expired():
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, plate, confidence, combined_score, strategy
+                SELECT id, plate, confidence, combined_score, strategy, image_path
                 FROM staging_detections
                 WHERE status = 'pending' AND expires_at <= now()
             """)
@@ -165,20 +165,19 @@ def staging_promote_expired():
 
             for row in expired:
                 plate = row["plate"]
-                # Marcar como aprobado en staging
-                cur.execute("""
-                    UPDATE staging_detections SET status = 'approved' WHERE id = %s
-                """, (row["id"],))
+                cur.execute(
+                    "UPDATE staging_detections SET status = 'approved' WHERE id = %s",
+                    (row["id"],)
+                )
 
-                # Si el auto ya está en parking (EXIT llegó mientras estaba en staging)
                 if vehicle_exists(plate):
                     _audit(plate, "PROMOTED_SKIP", {"reason": "already_in_parking"})
                     continue
 
-                # Registrar ENTRY
                 upsert_vehicle(plate, now_cl().timestamp() * 1000)
                 log_to_db(plate, "ENTRY", status="STAGING_AUTO",
-                          conf=float(row["combined_score"]))
+                          conf=float(row["combined_score"]),
+                          image_path=row["image_path"])
                 _audit(plate, "PROMOTED",
                        {"combined_score": float(row["combined_score"]),
                         "strategy": row["strategy"]})
@@ -277,6 +276,26 @@ async def api_staging_status(plate: str):
             for r in rows
         ],
     }
+
+
+class SetImageRequest(BaseModel):
+    plate: str
+    image_path: str
+
+
+@router.post("/api/staging/set-image")
+async def api_staging_set_image(req: SetImageRequest):
+    """Vincula la imagen archivada al registro de staging más reciente de la patente."""
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE staging_detections SET image_path = %s
+                WHERE plate = %s AND status = 'pending'
+                  AND expires_at > now()
+                ORDER BY detected_at DESC
+                LIMIT 1
+            """, (req.image_path, req.plate))
+    return {"status": "ok"}
 
 
 class FeedbackRequest(BaseModel):

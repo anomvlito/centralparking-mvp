@@ -405,3 +405,7 @@ app.include_router(ftp_router)
 from .staging import router as staging_router
 app.include_router(staging_router)
 
+# Register Excel upload + reconciliation
+from .excel import router as excel_router
+app.include_router(excel_router)
+

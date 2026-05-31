@@ -60,17 +60,13 @@ def _wait_for_file_ready(path: str) -> bool:
     return False
 
 
-def _archive(src: str, plate: str | None, suffix: str = "") -> None:
+def _archive(src: str, plate: str | None, suffix: str = "") -> str | None:
     """
-    Mueve la imagen a subcarpeta por fecha con nombre PLATE_HH-MM-SS_YYYY-MM-DD.jpg
-
-    Detectada:      /ftp/historico/2026-05-26/ZHBW94_14-23-51_2026-05-26.jpg
-    Duplicada:      /ftp/historico/2026-05-26/ZHBW94_14-23-56_2026-05-26_dup.jpg
-    No detectada:   /ftp/revisar/2026-05-26/NO_DETECTADA_14-24-01_2026-05-26.jpg
-    Vacía/corrupta: /ftp/revisar/2026-05-26/VACIA_14-24-06_2026-05-26.jpg
+    Mueve la imagen a subcarpeta por fecha.
+    Retorna el path relativo 'historico/{date}/{filename}' para vincularlo en la BD.
     """
     if not os.path.exists(src):
-        return
+        return None
 
     now = datetime.datetime.now(_CL)
     date_str = now.strftime("%Y-%m-%d")
@@ -80,15 +76,16 @@ def _archive(src: str, plate: str | None, suffix: str = "") -> None:
     if plate:
         folder = os.path.join(FTP_ARCHIVE_DIR, date_str)
         filename = f"{time_str}_{plate}_{date_str}{suffix}{ext}"
+        rel_path = f"historico/{date_str}/{filename}"
     else:
         folder = os.path.join(FTP_REVIEW_DIR, date_str)
         label = suffix.lstrip("_").upper() if suffix else "NO_DETECTADA"
         filename = f"{time_str}_{label}_{date_str}{ext}"
+        rel_path = None  # no vinculamos imágenes sin patente
 
     os.makedirs(folder, exist_ok=True)
     dest = os.path.join(folder, filename)
 
-    # Evitar colisión si ya existe un archivo con ese nombre
     counter = 1
     base, extension = os.path.splitext(dest)
     while os.path.exists(dest):
@@ -98,8 +95,10 @@ def _archive(src: str, plate: str | None, suffix: str = "") -> None:
     try:
         shutil.move(src, dest)
         log.info(f"ARC   {os.path.relpath(dest, '/ftp')}")
+        return rel_path
     except Exception as e:
         log.error(f"Error archivando {os.path.basename(src)}: {e}")
+        return None
 
 
 # ─────────────────────────── Handler ────────────────────────────────────────
@@ -132,20 +131,29 @@ class ReoLinkFTPHandler(FileSystemEventHandler):
                     timeout=30,
                 )
             data = res.json()
+            plate  = data.get("plate")
+            action = data.get("action")
 
-            if data.get("registered"):
-                plate = data["plate"]
-                log.info(
-                    f"ENTRY {plate} "
-                    f"conf={data.get('confidence', 0):.2f} "
-                    f"strategy={data.get('strategy')}"
-                )
+            if action == "EXIT":
+                log.info(f"EXIT  {plate} conf={data.get('confidence', 0):.2f}")
                 _archive(path, plate=plate)
 
-            elif data.get("reason") == "duplicate_within_window":
-                plate = data["plate"]
-                log.info(f"DUP   {plate}")
-                _archive(path, plate=plate, suffix="_dup")
+            elif action == "STAGED":
+                staging = data.get("staging", {})
+                is_dup  = staging.get("action") == "inferior_quality"
+                suffix  = "_dup" if is_dup else ""
+                log.info(f"STG   {plate} {staging.get('action')} score={staging.get('combined_score', 0):.3f}")
+                image_path = _archive(path, plate=plate, suffix=suffix)
+                # Vincular imagen al registro de staging si es la mejor calidad
+                if image_path and not is_dup:
+                    try:
+                        requests.post(
+                            f"{API_BASE}/api/staging/set-image",
+                            json={"plate": plate, "image_path": image_path},
+                            timeout=5,
+                        )
+                    except Exception:
+                        pass
 
             else:
                 error = data.get("error", "desconocido")

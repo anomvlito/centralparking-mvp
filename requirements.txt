@@ -5,3 +5,4 @@ numpy
 python-multipart
 fast-alpr
 psycopg2-binary
+openpyxl
