@@ -160,22 +160,22 @@ function Historial() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2">
-          <Calendar size={15} className="text-slate-400" />
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2 flex-1 min-w-0">
+          <Calendar size={14} className="text-slate-400 shrink-0" />
           <input type="date" value={date} onChange={e => setDate(e.target.value)}
-            className="text-sm font-semibold text-slate-700 outline-none bg-transparent" />
+            className="text-sm font-semibold text-slate-700 outline-none bg-transparent w-full min-w-0" />
         </div>
-        <div className="flex rounded-xl overflow-hidden border border-slate-200 bg-white">
+        <div className="flex rounded-xl overflow-hidden border border-slate-200 bg-white shrink-0">
           {(["ALL", "ENTRY", "EXIT"] as const).map(f => (
             <button key={f} onClick={() => setFilter(f)}
-              className={`px-3 py-2 text-xs font-bold transition-colors ${filter === f ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}>
+              className={`px-2.5 sm:px-3 py-2 text-xs font-bold transition-colors ${filter === f ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}>
               {f === "ALL" ? "Todos" : f === "ENTRY" ? "Entradas" : "Salidas"}
             </button>
           ))}
         </div>
-        <button onClick={load} className="ml-auto p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50">
-          <RefreshCw size={15} className={`text-slate-500 ${loading ? "animate-spin" : ""}`} />
+        <button onClick={load} className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 shrink-0">
+          <RefreshCw size={14} className={`text-slate-500 ${loading ? "animate-spin" : ""}`} />
         </button>
       </div>
 
@@ -296,34 +296,35 @@ function Reconciliacion() {
       {/* Resultados */}
       {s && (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4">
-              <p className="text-[10px] font-bold text-rose-500 uppercase tracking-widest">Solo cámara</p>
-              <p className="text-3xl font-black text-rose-600 mt-1">{s.camera_only}</p>
-              <p className="text-[10px] text-rose-400 mt-1">no registrado por operador</p>
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            <div className="bg-rose-50 border border-rose-200 rounded-xl sm:rounded-2xl p-3 sm:p-4">
+              <p className="text-[9px] sm:text-[10px] font-bold text-rose-500 uppercase tracking-widest">Solo cámara</p>
+              <p className="text-2xl sm:text-3xl font-black text-rose-600 mt-1">{s.camera_only}</p>
+              <p className="text-[9px] sm:text-[10px] text-rose-400 mt-1 hidden sm:block">no registrado</p>
             </div>
-            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
-              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Coinciden</p>
-              <p className="text-3xl font-black text-emerald-700 mt-1">{s.matched}</p>
-              <p className="text-[10px] text-emerald-500 mt-1">${s.excel_revenue.toLocaleString("es-CL")}</p>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl sm:rounded-2xl p-3 sm:p-4">
+              <p className="text-[9px] sm:text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Coinciden</p>
+              <p className="text-2xl sm:text-3xl font-black text-emerald-700 mt-1">{s.matched}</p>
+              <p className="text-[9px] sm:text-[10px] text-emerald-500 mt-1 hidden sm:block">${s.excel_revenue.toLocaleString("es-CL")}</p>
             </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-              <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Solo Excel</p>
-              <p className="text-3xl font-black text-amber-700 mt-1">{s.excel_only}</p>
-              <p className="text-[10px] text-amber-500 mt-1">cámara no detectó</p>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl sm:rounded-2xl p-3 sm:p-4">
+              <p className="text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase tracking-widest">Solo Excel</p>
+              <p className="text-2xl sm:text-3xl font-black text-amber-700 mt-1">{s.excel_only}</p>
+              <p className="text-[9px] sm:text-[10px] text-amber-500 mt-1 hidden sm:block">cámara no vio</p>
             </div>
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
             <div className="flex border-b border-slate-100">
               {([
-                ["camera_only", "🔴 Solo cámara"],
-                ["matched",     "✅ Coinciden"],
-                ["excel_only",  "🟡 Solo Excel"],
-              ] as const).map(([t, label]) => (
+                ["camera_only", "🔴 Solo cámara",  "🔴 Cámara"],
+                ["matched",     "✅ Coinciden",    "✅ Match"],
+                ["excel_only",  "🟡 Solo Excel",   "🟡 Excel"],
+              ] as const).map(([t, label, short]) => (
                 <button key={t} onClick={() => setDetailTab(t)}
                   className={`flex-1 py-3 text-xs font-bold transition-colors ${detailTab === t ? "bg-slate-50 text-slate-900 border-b-2 border-indigo-500" : "text-slate-400 hover:text-slate-600"}`}>
-                  {label}
+                  <span className="hidden sm:inline">{label}</span>
+                  <span className="sm:hidden">{short}</span>
                 </button>
               ))}
             </div>
@@ -418,23 +419,25 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-4">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
           <div className="flex items-center gap-2 shrink-0">
             <div className="bg-indigo-600 rounded-xl p-1.5">
               <Car size={18} className="text-white" />
             </div>
-            <span className="font-black text-slate-900">CentralParking</span>
+            <span className="font-black text-slate-900 hidden xs:block">CentralParking</span>
+            <span className="font-black text-slate-900 xs:hidden">CP</span>
           </div>
-          <p className="text-xs text-slate-400 hidden sm:block capitalize flex-1">{today}</p>
-          <nav className="flex gap-1">
+          <p className="text-xs text-slate-400 hidden md:block capitalize flex-1">{today}</p>
+          <nav className="ml-auto flex gap-1">
             {([
-              ["dashboard",      "Dashboard"],
-              ["historial",      "Historial"],
-              ["reconciliacion", "Excel"],
-            ] as const).map(([t, label]) => (
+              ["dashboard",      "Dashboard", "Inicio"],
+              ["historial",      "Historial", "Historial"],
+              ["reconciliacion", "Excel",     "Excel"],
+            ] as const).map(([t, label, short]) => (
               <button key={t} onClick={() => setTab(t)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${tab === t ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}>
-                {label}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${tab === t ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}>
+                <span className="hidden sm:inline">{label}</span>
+                <span className="sm:hidden">{short}</span>
               </button>
             ))}
           </nav>

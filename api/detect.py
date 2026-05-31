@@ -22,10 +22,13 @@ import statistics
 import cv2
 import numpy as np
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List
+
+_API_KEY = os.environ.get("API_KEY", "")
 
 from api.database import (
     init_db, load_db, upsert_vehicle, remove_vehicle, void_vehicle, vehicle_exists,
@@ -43,6 +46,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CParking AI Backend", version="2.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    # Localhost (watchdog, staging loop) pasa sin key
+    client = request.client.host if request.client else ""
+    if client in ("127.0.0.1", "::1", "localhost"):
+        return await call_next(request)
+    if _API_KEY:
+        key = request.headers.get("X-API-Key", "")
+        if key != _API_KEY:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
