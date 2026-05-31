@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from api.database import (
-    init_db, load_db, upsert_vehicle, remove_vehicle, vehicle_exists,
+    init_db, load_db, upsert_vehicle, remove_vehicle, void_vehicle, vehicle_exists,
     log_to_db as log_to_csv, get_history, get_stats_today, clear_history, now_cl,
 )
 
@@ -372,14 +372,14 @@ async def entry(e: CarEntry):
 async def exit_car(plate: str, fee: float = 0):
     if not vehicle_exists(plate):
         raise HTTPException(status_code=404, detail="Plate not in parking")
-    remove_vehicle(plate)
+    remove_vehicle(plate, fee=fee)
     log_to_csv(plate, "EXIT", fee=fee)
     return {"status": "ok"}
 
 
 @app.delete("/api/cars/{plate}")
 async def delete_car(plate: str):
-    remove_vehicle(plate)
+    void_vehicle(plate)
     log_to_csv(plate, "VOID")
     return {"status": "voided"}
 

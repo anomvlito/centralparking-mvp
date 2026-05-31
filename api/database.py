@@ -1,141 +1,222 @@
 """
 database.py — Central Parking MVP
-Capa de persistencia SQLite. Reemplaza parking_db.json y history.csv.
+Capa de persistencia PostgreSQL.
+Misma interfaz pública que la versión SQLite — detect.py, ftp_handler.py y
+video_processor.py no requieren cambios.
 """
 
-import sqlite3
-import datetime
 import os
+import datetime
+import psycopg2
+import psycopg2.extras
+from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 
 _CL = ZoneInfo("America/Santiago")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL no está configurada en el servicio systemd")
 
 
 def now_cl() -> datetime.datetime:
     return datetime.datetime.now(_CL)
 
-DB_PATH = os.environ.get("PARKING_DB_PATH", "parking.db")
 
-
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+@contextmanager
+def _db():
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_db():
-    with get_conn() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS vehicles (
-                plate       TEXT PRIMARY KEY,
-                entry_time  INTEGER NOT NULL,
-                is_event    INTEGER NOT NULL DEFAULT 0,
-                event_fee   REAL
-            );
+    """Crea tablas faltantes (idempotente). Se llama al arrancar FastAPI."""
+    with _db() as conn:
+        with conn.cursor() as cur:
+            # Log de cada evento de detección/entrada/salida/void
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS detection_log (
+                    id          BIGSERIAL    PRIMARY KEY,
+                    logged_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+                    plate       VARCHAR(20)  NOT NULL,
+                    action      VARCHAR(20)  NOT NULL,
+                    status      VARCHAR(10)  NOT NULL DEFAULT 'REAL',
+                    fee         NUMERIC(10,2) NOT NULL DEFAULT 0,
+                    confidence  NUMERIC(5,4)  NOT NULL DEFAULT 1.0
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_detection_log_plate
+                ON detection_log(plate)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_detection_log_logged_at
+                ON detection_log(logged_at)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_detection_log_action
+                ON detection_log(action)
+            """)
 
-            CREATE TABLE IF NOT EXISTS history (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp   TEXT NOT NULL,
-                plate       TEXT NOT NULL,
-                action      TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'REAL',
-                fee         REAL DEFAULT 0,
-                confidence  REAL DEFAULT 1.0
-            );
 
-            CREATE INDEX IF NOT EXISTS idx_history_plate     ON history(plate);
-            CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_history_action    ON history(action);
-        """)
-
-
-# ─────────────────────── vehicles ───────────────────────────────────────────
+# ─────────────────────── vehículos activos ──────────────────────────────────
 
 def load_db() -> dict:
-    with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM vehicles").fetchall()
+    """Devuelve {plate: {...}} de vehículos actualmente en el estacionamiento."""
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT plate,
+                       EXTRACT(EPOCH FROM entry_time)::bigint * 1000 AS entry_time_ms,
+                       is_event,
+                       event_fee
+                FROM parking_sessions
+                WHERE exit_time IS NULL AND status != 'VOID'
+            """)
+            rows = cur.fetchall()
     return {
         r["plate"]: {
             "plate":     r["plate"],
-            "entryTime": r["entry_time"],
+            "entryTime": int(r["entry_time_ms"]),
             "isEvent":   bool(r["is_event"]),
-            "eventFee":  r["event_fee"],
+            "eventFee":  float(r["event_fee"]) if r["event_fee"] is not None else None,
         }
         for r in rows
     }
 
 
-def upsert_vehicle(plate: str, entry_time_ms: float, is_event: bool = False, event_fee=None):
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO vehicles (plate, entry_time, is_event, event_fee)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(plate) DO UPDATE SET
-                   entry_time = excluded.entry_time,
-                   is_event   = excluded.is_event,
-                   event_fee  = excluded.event_fee""",
-            (plate, int(entry_time_ms), int(is_event), event_fee),
-        )
+def upsert_vehicle(plate: str, entry_time_ms: float,
+                   is_event: bool = False, event_fee=None):
+    entry_dt = datetime.datetime.fromtimestamp(entry_time_ms / 1000, tz=_CL)
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO vehicles (plate) VALUES (%s) ON CONFLICT (plate) DO NOTHING",
+                (plate,)
+            )
+            cur.execute("""
+                SELECT id FROM parking_sessions
+                WHERE plate = %s AND exit_time IS NULL AND status != 'VOID'
+                LIMIT 1
+            """, (plate,))
+            existing = cur.fetchone()
+            if existing:
+                cur.execute("""
+                    UPDATE parking_sessions
+                    SET entry_time = %s, is_event = %s, event_fee = %s, updated_at = now()
+                    WHERE id = %s
+                """, (entry_dt, is_event, event_fee, existing["id"]))
+            else:
+                cur.execute("""
+                    INSERT INTO parking_sessions
+                        (plate, entry_time, is_event, event_fee, source, status)
+                    VALUES (%s, %s, %s, %s, 'camera_auto', 'REAL')
+                """, (plate, entry_dt, is_event, event_fee))
 
 
-def remove_vehicle(plate: str):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM vehicles WHERE plate = ?", (plate,))
+def remove_vehicle(plate: str, fee: float = 0):
+    """Cierra la sesión activa registrando la salida y la tarifa."""
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE parking_sessions
+                SET exit_time = now(), fee = %s, updated_at = now()
+                WHERE plate = %s AND exit_time IS NULL AND status != 'VOID'
+            """, (fee or 0, plate))
+
+
+def void_vehicle(plate: str):
+    """Anula la sesión activa sin registrar salida (no se pierde el registro)."""
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE parking_sessions
+                SET status = 'VOID', exit_time = now(), updated_at = now()
+                WHERE plate = %s AND exit_time IS NULL
+            """, (plate,))
 
 
 def vehicle_exists(plate: str) -> bool:
-    with get_conn() as conn:
-        row = conn.execute("SELECT 1 FROM vehicles WHERE plate = ?", (plate,)).fetchone()
-    return row is not None
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1 FROM parking_sessions
+                WHERE plate = %s AND exit_time IS NULL AND status != 'VOID'
+            """, (plate,))
+            return cur.fetchone() is not None
 
 
-def count_vehicles() -> int:
-    with get_conn() as conn:
-        return conn.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0]
+# ─────────────────────── log / historial ────────────────────────────────────
+
+def log_to_db(plate: str, action: str, status: str = "REAL",
+              fee: float = 0, conf: float = 1.0):
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO detection_log (plate, action, status, fee, confidence)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (plate, action, status, fee, conf))
 
 
-# ─────────────────────── history ────────────────────────────────────────────
-
-def log_to_db(plate: str, action: str, status: str = "REAL", fee: float = 0, conf: float = 1.0):
-    ts = now_cl().strftime("%Y-%m-%d %H:%M:%S")
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO history (timestamp, plate, action, status, fee, confidence) VALUES (?,?,?,?,?,?)",
-            (ts, plate, action, status, fee, round(conf, 2)),
-        )
-
-
-def get_history(limit: int = 50) -> list:
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT timestamp, plate, action, status, fee, confidence FROM history ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [[r["timestamp"], r["plate"], r["action"], r["status"], r["fee"], r["confidence"]] for r in rows]
+def get_history(limit: int = 200) -> list:
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT logged_at  AS timestamp,
+                       plate, action, status,
+                       fee, confidence
+                FROM detection_log
+                ORDER BY logged_at DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+    result = []
+    for r in rows:
+        result.append({
+            "timestamp":  r["timestamp"].strftime("%Y-%m-%d %H:%M:%S"),
+            "plate":      r["plate"],
+            "action":     r["action"],
+            "status":     r["status"],
+            "fee":        float(r["fee"]),
+            "confidence": float(r["confidence"]),
+        })
+    return result
 
 
 def get_stats_today() -> dict:
-    today = now_cl().strftime("%Y-%m-%d")
-    with get_conn() as conn:
-        row = conn.execute("""
-            SELECT
-                COALESCE(SUM(CASE WHEN action='EXIT'  THEN fee   ELSE 0 END), 0) AS income,
-                COALESCE(SUM(CASE WHEN action='ENTRY' THEN 1     ELSE 0 END), 0) AS entries,
-                COALESCE(SUM(CASE WHEN action='EXIT'  THEN 1     ELSE 0 END), 0) AS exits,
-                COUNT(*) AS total_parked
-            FROM history
-            WHERE timestamp LIKE ?
-        """, (f"{today}%",)).fetchone()
-        parked = conn.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0]
+    today = now_cl().replace(hour=0, minute=0, second=0, microsecond=0)
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE action = 'ENTRY')               AS entries,
+                    COUNT(*) FILTER (WHERE action = 'EXIT')                AS exits,
+                    COALESCE(SUM(fee) FILTER (WHERE action = 'EXIT'), 0)   AS revenue
+                FROM detection_log
+                WHERE logged_at >= %s AND status = 'REAL'
+            """, (today,))
+            stats = cur.fetchone()
+            cur.execute("""
+                SELECT COUNT(*) AS parked
+                FROM parking_sessions
+                WHERE exit_time IS NULL AND status != 'VOID'
+            """)
+            parked = cur.fetchone()
     return {
-        "today_income":  row["income"],
-        "today_entries": row["entries"],
-        "today_exits":   row["exits"],
-        "parked_now":    parked,
+        "today_income":  float(stats["revenue"]),
+        "today_entries": int(stats["entries"]),
+        "today_exits":   int(stats["exits"]),
+        "parked_now":    int(parked["parked"]),
     }
 
 
 def clear_history():
-    with get_conn() as conn:
-        conn.execute("DELETE FROM history")
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM detection_log")
