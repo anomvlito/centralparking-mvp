@@ -292,9 +292,15 @@ def extract_best_plate(results, strategy_name: str) -> Optional[dict]:
         if conf > best_conf:
             best_conf = conf
             best_text = text
+            best_bbox_w = r.detection.bounding_box.width if r.detection else 0
 
     if best_text:
-        return {"plate": best_text, "confidence": best_conf, "strategy": strategy_name}
+        return {
+            "plate":      best_text,
+            "confidence": best_conf,
+            "strategy":   strategy_name,
+            "bbox_width": best_bbox_w,  # ancho del bounding box de la patente en px
+        }
     return None
 
 
