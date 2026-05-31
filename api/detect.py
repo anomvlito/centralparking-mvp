@@ -40,6 +40,7 @@ _JWT_SECRET = os.environ.get("JWT_SECRET", "changeme-set-JWT_SECRET-in-env")
 
 # Rutas que no requieren JWT
 _PUBLIC_PATHS = {"/auth/login", "/docs", "/openapi.json", "/redoc"}
+_PUBLIC_PATH_PREFIXES = {"/api/monitor/file"}  # imágenes sin auth
 
 
 @asynccontextmanager
@@ -70,7 +71,8 @@ async def security_middleware(request: Request, call_next):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
     # 2. JWT check (externo, rutas no públicas)
-    if not is_local and path not in _PUBLIC_PATHS:
+    is_public = path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
+    if not is_local and not is_public:
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return JSONResponse({"detail": "Se requiere autenticación"}, status_code=401)
