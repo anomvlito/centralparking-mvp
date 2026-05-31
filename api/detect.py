@@ -14,12 +14,14 @@ Estrategias de detección (en orden de prioridad):
   5. Cropped Center     - recorte del 60% central (útil cuando el viewfinder no está bien centrado)
 """
 
+import asyncio
 import os
 import datetime
 import random
 import statistics
 import cv2
 import numpy as np
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -30,7 +32,17 @@ from api.database import (
     log_to_db as log_to_csv, get_history, get_stats_today, clear_history, now_cl,
 )
 
-app = FastAPI(title="CParking AI Backend", version="2.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    from api.staging import staging_loop
+    task = asyncio.create_task(staging_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="CParking AI Backend", version="2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,8 +50,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-init_db()
 
 # ─────────────────────────── Motor de IA ───────────────────────────────────
 
@@ -387,7 +397,11 @@ async def delete_car(plate: str):
 from .video_processor import router as video_router
 app.include_router(video_router)
 
-# Register FTP handler (nuevos endpoints, no modifica los existentes)
+# Register FTP handler
 from .ftp_handler import router as ftp_router
 app.include_router(ftp_router)
+
+# Register staging + audit endpoints
+from .staging import router as staging_router
+app.include_router(staging_router)
 

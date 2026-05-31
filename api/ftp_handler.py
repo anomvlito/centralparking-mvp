@@ -23,9 +23,10 @@ from pydantic import BaseModel
 
 from api.detect import alpr, HAS_ML, run_multi_strategy
 from api.database import (
-    now_cl, upsert_vehicle, vehicle_exists, remove_vehicle,
+    now_cl, vehicle_exists, remove_vehicle,
     log_to_db as log_to_csv,
 )
+from api.staging import calculate_quality_score, staging_submit
 from api.video_processor import _process_video_task, VIDEO_RESULTS_DIR
 
 router = APIRouter()
@@ -33,10 +34,6 @@ router = APIRouter()
 FTP_EVENTS_FILE  = "ftp_events.json"
 FTP_ARCHIVE_DIR  = os.environ.get("FTP_ARCHIVE_DIR", "/ftp/historico")
 FTP_REVIEW_DIR   = os.environ.get("FTP_REVIEW_DIR",  "/ftp/revisar")
-DEDUP_WINDOW_SECONDS = 120
-
-# plate -> timestamp float del último registro vía FTP (para deduplicar entradas)
-_recent_ftp_detections: dict[str, float] = {}
 
 
 # ─────────────────────────── Helpers ────────────────────────────────────────
@@ -62,39 +59,37 @@ def _append_ftp_event(plate: str, source: str, confidence: float, strategy: str,
         json.dump(events[-500:], f, indent=2)
 
 
-def _is_recent_entry(plate: str) -> bool:
-    """True si esta patente ya fue registrada como ENTRY en la ventana de deduplicación."""
-    now_ts = now_cl().timestamp()
-    last_seen = _recent_ftp_detections.get(plate)
-    if last_seen and (now_ts - last_seen) < DEDUP_WINDOW_SECONDS:
-        return True
-    return False
-
-
-def _handle_auto_detection(plate: str, source: str, confidence: float, strategy: str) -> dict:
+def _handle_auto_detection(plate: str, source: str, confidence: float,
+                            strategy: str, img: np.ndarray = None) -> dict:
     """
-    Lógica central de entrada/salida automática:
-    - Si el auto está estacionado → EXIT
-    - Si no está y fue visto recientemente → duplicado, ignorar
-    - Si no está y no fue visto → ENTRY
+    Lógica central de entrada/salida automática.
+    EXIT es inmediato. ENTRY pasa por el buffer de staging (dedup + quality).
     """
     if vehicle_exists(plate):
         remove_vehicle(plate)
         log_to_csv(plate, "EXIT", status="FTP_AUTO")
         _append_ftp_event(plate, source, confidence, strategy, action="EXIT")
-        _recent_ftp_detections.pop(plate, None)
         return {"plate": plate, "action": "EXIT", "registered": True,
                 "confidence": confidence, "strategy": strategy}
 
-    if _is_recent_entry(plate):
-        return {"plate": plate, "action": "DUP", "registered": False, "reason": "duplicate_within_window"}
+    # Calcular quality score si tenemos imagen; fallback a solo confianza
+    if img is not None:
+        quality = calculate_quality_score(img, plate, confidence)
+    else:
+        quality = {
+            "quality_score":    confidence,
+            "combined_score":   confidence,
+            "sharpness":        0.5,
+            "contrast_score":   0.5,
+            "brightness_score": 0.5,
+            "ocr_clarity":      confidence,
+        }
 
-    _recent_ftp_detections[plate] = now_cl().timestamp()
-    upsert_vehicle(plate, now_cl().timestamp() * 1000)
-    log_to_csv(plate, "ENTRY", status="FTP_AUTO")
-    _append_ftp_event(plate, source, confidence, strategy, action="ENTRY")
-    return {"plate": plate, "action": "ENTRY", "registered": True,
-            "confidence": confidence, "strategy": strategy}
+    staging_result = staging_submit(plate, confidence, quality, strategy)
+    _append_ftp_event(plate, source, confidence, strategy, action="STAGED")
+    return {"plate": plate, "action": "STAGED", "registered": False,
+            "confidence": confidence, "strategy": strategy,
+            "staging": staging_result}
 
 
 # ─────────────────────────── Background task video ──────────────────────────
@@ -140,7 +135,7 @@ async def ftp_image(image: UploadFile = File(...)):
         return {"plate": None, "registered": False, "error": "no_detection"}
 
     return _handle_auto_detection(
-        result["plate"], "image", result["confidence"], result["strategy"]
+        result["plate"], "image", result["confidence"], result["strategy"], img=img
     )
 
 
