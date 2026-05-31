@@ -36,9 +36,17 @@ from api.database import (
 )
 
 
+_JWT_SECRET = os.environ.get("JWT_SECRET", "changeme-set-JWT_SECRET-in-env")
+
+# Rutas que no requieren JWT
+_PUBLIC_PATHS = {"/auth/login", "/docs", "/openapi.json", "/redoc"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    from api.auth import ensure_default_admin
+    ensure_default_admin()
     from api.staging import staging_loop
     task = asyncio.create_task(staging_loop())
     yield
@@ -49,15 +57,28 @@ app = FastAPI(title="CParking AI Backend", version="2.0", lifespan=lifespan)
 
 
 @app.middleware("http")
-async def require_api_key(request: Request, call_next):
-    # Localhost (watchdog, staging loop) pasa sin key
+async def security_middleware(request: Request, call_next):
+    from jose import JWTError, jwt as _jwt
+
     client = request.client.host if request.client else ""
-    if client in ("127.0.0.1", "::1", "localhost"):
-        return await call_next(request)
-    if _API_KEY:
-        key = request.headers.get("X-API-Key", "")
-        if key != _API_KEY:
+    is_local = client in ("127.0.0.1", "::1", "localhost")
+    path = request.url.path
+
+    # 1. API key check (externo solamente)
+    if not is_local and _API_KEY:
+        if request.headers.get("X-API-Key", "") != _API_KEY:
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    # 2. JWT check (externo, rutas no públicas)
+    if not is_local and path not in _PUBLIC_PATHS:
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse({"detail": "Se requiere autenticación"}, status_code=401)
+        try:
+            _jwt.decode(auth_header[7:], _JWT_SECRET, algorithms=["HS256"])
+        except JWTError:
+            return JSONResponse({"detail": "Token inválido o expirado"}, status_code=401)
+
     return await call_next(request)
 
 
@@ -425,4 +446,8 @@ app.include_router(staging_router)
 # Register Excel upload + reconciliation
 from .excel import router as excel_router
 app.include_router(excel_router)
+
+# Register auth
+from .auth import router as auth_router
+app.include_router(auth_router)
 

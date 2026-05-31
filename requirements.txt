@@ -6,3 +6,5 @@ python-multipart
 fast-alpr
 psycopg2-binary
 openpyxl
+passlib[bcrypt]
+python-jose[cryptography]

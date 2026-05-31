@@ -4,12 +4,14 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { format, addDays, subDays, isToday, parseISO } from "date-fns";
 import { es } from "date-fns/locale";
 import {
-  Car, AlertTriangle, CheckCircle2, HelpCircle,
-  Upload, Calendar, RefreshCw, Image as ImageIcon, X,
-  ChevronLeft, ChevronRight,
+  Car, AlertTriangle, CheckCircle2, HelpCircle, Upload,
+  Calendar, RefreshCw, Image as ImageIcon, X,
+  ChevronLeft, ChevronRight, LogIn, LogOut, Eye, EyeOff, User,
 } from "lucide-react";
 
 const API = "";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type HistoryEntry = {
   timestamp: string; plate: string; action: string;
@@ -21,50 +23,149 @@ type Stats = {
 };
 type ReconcileResult = {
   date: string;
-  summary: {
-    camera_total: number; excel_total: number; matched: number;
-    camera_only: number; excel_only: number; excel_revenue: number;
-  };
+  summary: { camera_total: number; excel_total: number; matched: number; camera_only: number; excel_only: number; excel_revenue: number; };
   camera_only: any[]; matched: any[]; excel_only: any[];
 };
+type AuthState = { token: string; username: string; role: string } | null;
 
-// ─── components ──────────────────────────────────────────────────────────────
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, accent = "text-slate-900" }: {
-  label: string; value: string | number; sub?: string; accent?: string;
-}) {
+function getAuth(): AuthState {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem("cp_auth");
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function setAuth(auth: AuthState) {
+  if (auth) localStorage.setItem("cp_auth", JSON.stringify(auth));
+  else localStorage.removeItem("cp_auth");
+}
+
+function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const auth = getAuth();
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}),
+    },
+  });
+}
+
+// ─── Login page ───────────────────────────────────────────────────────────────
+
+function LoginPage({ onLogin }: { onLogin: (auth: AuthState) => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw]     = useState(false);
+  const [error, setError]       = useState("");
+  const [loading, setLoading]   = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true); setError("");
+    try {
+      const r = await fetch(`${API}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!r.ok) { setError("Usuario o contraseña incorrectos"); return; }
+      const data = await r.json();
+      const auth = { token: data.access_token, username: data.username, role: data.role };
+      setAuth(auth);
+      onLogin(auth);
+    } catch { setError("Error de conexión con el servidor"); }
+    finally { setLoading(false); }
+  };
+
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col gap-1">
-      <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</p>
-      <p className={`text-3xl font-black tabular-nums ${accent}`}>{value}</p>
-      {sub && <p className="text-xs text-slate-400">{sub}</p>}
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-xl w-full max-w-sm p-8">
+        <div className="flex flex-col items-center gap-3 mb-8">
+          <div className="bg-indigo-600 rounded-2xl p-3">
+            <Car size={32} className="text-white" />
+          </div>
+          <h1 className="text-2xl font-black text-slate-900">CentralParking</h1>
+          <p className="text-sm text-slate-400">Ingresá con tu cuenta</p>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-1.5">
+              Usuario
+            </label>
+            <div className="flex items-center gap-2 border border-slate-200 rounded-xl px-3 py-2.5 focus-within:border-indigo-400 transition-colors">
+              <User size={16} className="text-slate-400 shrink-0" />
+              <input
+                type="text" value={username} onChange={e => setUsername(e.target.value)}
+                placeholder="admin" autoComplete="username" required
+                className="flex-1 outline-none text-sm font-semibold text-slate-800 bg-transparent placeholder:text-slate-300"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-1.5">
+              Contraseña
+            </label>
+            <div className="flex items-center gap-2 border border-slate-200 rounded-xl px-3 py-2.5 focus-within:border-indigo-400 transition-colors">
+              <LogIn size={16} className="text-slate-400 shrink-0" />
+              <input
+                type={showPw ? "text" : "password"} value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••" autoComplete="current-password" required
+                className="flex-1 outline-none text-sm font-semibold text-slate-800 bg-transparent placeholder:text-slate-300"
+              />
+              <button type="button" onClick={() => setShowPw(!showPw)} className="text-slate-300 hover:text-slate-500">
+                {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-rose-500 font-semibold text-center">{error}</p>}
+
+          <button type="submit" disabled={loading}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-black py-3 rounded-xl transition-colors text-sm">
+            {loading ? "Ingresando..." : "Ingresar"}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
 
-function PhotoThumb({ url, plate }: { url: string | null; plate: string }) {
+// ─── Shared components ────────────────────────────────────────────────────────
+
+function PhotoThumb({ url, plate, size = "sm" }: { url: string | null; plate: string; size?: "sm" | "lg" }) {
   const [open, setOpen] = useState(false);
+  const cls = size === "lg"
+    ? "w-20 h-14 lg:w-24 lg:h-16"
+    : "w-14 h-10";
+
   if (!url) return (
-    <div className="w-14 h-10 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
-      <ImageIcon size={16} className="text-slate-300" />
+    <div className={`${cls} rounded-xl bg-slate-100 flex items-center justify-center shrink-0`}>
+      <ImageIcon size={size === "lg" ? 20 : 15} className="text-slate-300" />
     </div>
   );
   return (
     <>
       <button onClick={() => setOpen(true)} className="shrink-0">
         <img src={url} alt={plate} loading="lazy"
-          className="w-14 h-10 object-cover rounded-lg border border-slate-200 hover:scale-105 transition-transform" />
+          className={`${cls} object-cover rounded-xl border border-slate-200 hover:scale-105 transition-transform cursor-zoom-in`} />
       </button>
       {open && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
           onClick={() => setOpen(false)}>
-          <div className="relative max-w-2xl w-full" onClick={e => e.stopPropagation()}>
+          <div className="relative max-w-3xl w-full" onClick={e => e.stopPropagation()}>
             <button onClick={() => setOpen(false)}
-              className="absolute -top-3 -right-3 bg-white rounded-full p-1 shadow-lg">
+              className="absolute -top-4 -right-4 bg-white rounded-full p-1.5 shadow-lg z-10">
               <X size={18} />
             </button>
             <img src={url} alt={plate} className="w-full rounded-2xl shadow-2xl" />
-            <p className="text-center text-white font-black text-xl mt-3 tracking-widest">{plate}</p>
+            <p className="text-center text-white font-black text-2xl mt-4 tracking-widest font-mono">{plate}</p>
           </div>
         </div>
       )}
@@ -74,18 +175,66 @@ function PhotoThumb({ url, plate }: { url: string | null; plate: string }) {
 
 function ActionBadge({ action }: { action: string }) {
   const styles: Record<string, string> = {
-    ENTRY:     "bg-emerald-100 text-emerald-700",
-    EXIT:      "bg-rose-100 text-rose-700",
-    VOID:      "bg-slate-100 text-slate-500",
-    DETECTION: "bg-sky-100 text-sky-700",
+    ENTRY: "bg-emerald-100 text-emerald-700", EXIT: "bg-rose-100 text-rose-700",
+    VOID: "bg-slate-100 text-slate-500", DETECTION: "bg-sky-100 text-sky-700",
   };
   const labels: Record<string, string> = {
     ENTRY: "Entrada", EXIT: "Salida", VOID: "Anulado", DETECTION: "Detección",
   };
   return (
-    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${styles[action] ?? "bg-slate-100 text-slate-500"}`}>
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase ${styles[action] ?? "bg-slate-100 text-slate-500"}`}>
       {labels[action] ?? action}
     </span>
+  );
+}
+
+function StatCard({ label, value, sub, accent = "text-slate-900" }: {
+  label: string; value: string | number; sub?: string; accent?: string;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-4 lg:p-5">
+      <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{label}</p>
+      <p className={`text-3xl lg:text-4xl font-black tabular-nums mt-1 ${accent}`}>{value}</p>
+      {sub && <p className="text-xs text-slate-400 mt-1">{sub}</p>}
+    </div>
+  );
+}
+
+// ─── Feed row (shared by Dashboard and Historial) ─────────────────────────────
+
+function FeedRow({ r, showDate = false }: { r: HistoryEntry; showDate?: boolean }) {
+  const today = format(new Date(), "yyyy-MM-dd");
+  return (
+    <div className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
+      <PhotoThumb url={r.image_url} plate={r.plate} size="lg" />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">
+            {r.plate}
+          </span>
+          <ActionBadge action={r.action} />
+          {r.status && r.status !== "REAL" && (
+            <span className="text-[10px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded hidden sm:inline">
+              {r.status}
+            </span>
+          )}
+        </div>
+        <p className="text-sm lg:text-base text-slate-400 font-mono mt-0.5">
+          {(showDate || r.timestamp.split(" ")[0] !== today) && (
+            <span className="text-slate-300 mr-1.5">{r.timestamp.split(" ")[0]}</span>
+          )}
+          {r.timestamp.split(" ")[1]}
+        </p>
+      </div>
+      {r.fee > 0 && (
+        <span className="text-base lg:text-lg font-bold text-slate-700 tabular-nums shrink-0">
+          ${r.fee.toLocaleString("es-CL")}
+        </span>
+      )}
+      <span className="text-xs text-slate-300 tabular-nums shrink-0 hidden md:block w-10 text-right">
+        {(r.confidence * 100).toFixed(0)}%
+      </span>
+    </div>
   );
 }
 
@@ -93,47 +242,46 @@ function ActionBadge({ action }: { action: string }) {
 
 function Dashboard({ stats, history, loading }: { stats: Stats; history: HistoryEntry[]; loading: boolean }) {
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Entradas hoy"  value={stats.today_entries} accent="text-emerald-600" />
-        <StatCard label="Salidas hoy"   value={stats.today_exits}   accent="text-rose-600" />
-        <StatCard label="En parking"    value={stats.parked_now}    accent="text-indigo-600" />
-        <StatCard label="Recaudado"     value={`$${stats.today_income.toLocaleString("es-CL")}`} accent="text-amber-600" />
+    <div className="space-y-5 lg:space-y-0 lg:grid lg:grid-cols-[300px_1fr] lg:gap-6">
+
+      {/* Left: stats */}
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard label="Entradas hoy"  value={stats.today_entries} accent="text-emerald-600" />
+          <StatCard label="Salidas hoy"   value={stats.today_exits}   accent="text-rose-600" />
+          <StatCard label="En parking"    value={stats.parked_now}    accent="text-indigo-600" />
+          <StatCard label="Recaudado"
+            value={`$${stats.today_income.toLocaleString("es-CL")}`} accent="text-amber-600" />
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 hidden lg:block">
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Estado</p>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-slate-500">Cámara</span>
+              <span className="font-bold text-emerald-600">● Activa</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Staging</span>
+              <span className="font-bold text-emerald-600">● Activo</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Actualización</span>
+              <span className="font-bold text-slate-400">cada 15s</span>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200">
+      {/* Right: feed */}
+      <div className="bg-white rounded-2xl border border-slate-200 lg:overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-          <h2 className="font-bold text-slate-700 text-sm">Feed en vivo</h2>
-          {loading && <RefreshCw size={14} className="animate-spin text-slate-400" />}
+          <h2 className="font-bold text-slate-700">Feed en vivo</h2>
+          {loading && <RefreshCw size={15} className="animate-spin text-slate-400" />}
         </div>
-        <div className="divide-y divide-slate-50">
-          {history.slice(0, 40).map((r, i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-2.5">
-              <PhotoThumb url={r.image_url} plate={r.plate} />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-black text-slate-900 tracking-widest text-sm font-mono">{r.plate}</span>
-                  <ActionBadge action={r.action} />
-                </div>
-                <p className="text-xs text-slate-400 font-mono">
-                  {r.timestamp.split(" ")[0] !== format(new Date(), "yyyy-MM-dd") && (
-                    <span className="text-slate-300 mr-1">{r.timestamp.split(" ")[0]}</span>
-                  )}
-                  {r.timestamp.split(" ")[1]}
-                </p>
-              </div>
-              {r.fee > 0 && (
-                <span className="text-sm font-bold text-slate-600 tabular-nums shrink-0">
-                  ${r.fee.toLocaleString("es-CL")}
-                </span>
-              )}
-              <span className="text-[10px] text-slate-300 tabular-nums shrink-0 hidden sm:block">
-                {(r.confidence * 100).toFixed(0)}%
-              </span>
-            </div>
-          ))}
+        <div className="divide-y divide-slate-50 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
+          {history.slice(0, 50).map((r, i) => <FeedRow key={i} r={r} />)}
           {history.length === 0 && !loading && (
-            <p className="text-center text-slate-400 text-sm py-12">Sin actividad registrada</p>
+            <p className="text-center text-slate-400 py-16">Sin actividad registrada</p>
           )}
         </div>
       </div>
@@ -152,11 +300,8 @@ function Historial() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/history?limit=1000`);
-      if (r.ok) {
-        const all: HistoryEntry[] = await r.json();
-        setRows(all.filter(e => e.timestamp.startsWith(date)));
-      }
+      const r = await apiFetch(`${API}/api/history?limit=2000`);
+      if (r.ok) setRows((await r.json()).filter((e: HistoryEntry) => e.timestamp.startsWith(date)));
     } finally { setLoading(false); }
   }, [date]);
 
@@ -167,22 +312,20 @@ function Historial() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-        {/* Navegación de fecha */}
-        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl overflow-hidden shrink-0">
-          <button
-            onClick={() => setDate(format(subDays(parseISO(date), 1), "yyyy-MM-dd"))}
-            className="p-2 hover:bg-slate-50 text-slate-400 hover:text-slate-700 transition-colors">
+        {/* Nav fecha */}
+        <div className="flex items-center bg-white border border-slate-200 rounded-xl overflow-hidden shrink-0">
+          <button onClick={() => setDate(format(subDays(parseISO(date), 1), "yyyy-MM-dd"))}
+            className="p-2.5 hover:bg-slate-50 text-slate-400 hover:text-slate-700 transition-colors">
             <ChevronLeft size={16} />
           </button>
           <div className="flex items-center gap-1.5 px-1">
-            <Calendar size={13} className="text-slate-400" />
+            <Calendar size={14} className="text-slate-400" />
             <input type="date" value={date} onChange={e => setDate(e.target.value)}
-              className="text-sm font-semibold text-slate-700 outline-none bg-transparent w-32" />
+              className="text-sm font-semibold text-slate-700 outline-none bg-transparent w-32 lg:w-36" />
           </div>
-          <button
-            onClick={() => setDate(format(addDays(parseISO(date), 1), "yyyy-MM-dd"))}
+          <button onClick={() => setDate(format(addDays(parseISO(date), 1), "yyyy-MM-dd"))}
             disabled={isToday(parseISO(date))}
-            className="p-2 hover:bg-slate-50 text-slate-400 hover:text-slate-700 disabled:opacity-30 transition-colors">
+            className="p-2.5 hover:bg-slate-50 text-slate-400 hover:text-slate-700 disabled:opacity-30 transition-colors">
             <ChevronRight size={16} />
           </button>
         </div>
@@ -190,51 +333,27 @@ function Historial() {
         <div className="flex rounded-xl overflow-hidden border border-slate-200 bg-white shrink-0">
           {(["ALL", "ENTRY", "EXIT"] as const).map(f => (
             <button key={f} onClick={() => setFilter(f)}
-              className={`px-2.5 sm:px-3 py-2 text-xs font-bold transition-colors ${filter === f ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}>
+              className={`px-3 lg:px-4 py-2.5 text-xs lg:text-sm font-bold transition-colors ${filter === f ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}>
               {f === "ALL" ? "Todos" : f === "ENTRY" ? "Entradas" : "Salidas"}
             </button>
           ))}
         </div>
-        <button onClick={load} className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 shrink-0">
-          <RefreshCw size={14} className={`text-slate-500 ${loading ? "animate-spin" : ""}`} />
+        <button onClick={load} className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50">
+          <RefreshCw size={15} className={`text-slate-500 ${loading ? "animate-spin" : ""}`} />
         </button>
+        {visible.length > 0 && (
+          <span className="ml-auto text-xs text-slate-400">{visible.length} registros</span>
+        )}
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <div className="divide-y divide-slate-50">
-          {visible.map((r, i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-2.5">
-              <PhotoThumb url={r.image_url} plate={r.plate} />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-black text-slate-900 tracking-widest text-sm font-mono">{r.plate}</span>
-                  <ActionBadge action={r.action} />
-                  {r.status && r.status !== "REAL" && (
-                    <span className="text-[10px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded">
-                      {r.status}
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-slate-400 font-mono">{r.timestamp}</p>
-              </div>
-              {r.fee > 0 && (
-                <span className="text-sm font-bold text-emerald-600 tabular-nums shrink-0">
-                  ${r.fee.toLocaleString("es-CL")}
-                </span>
-              )}
-              <span className="text-[10px] text-slate-300 tabular-nums shrink-0 hidden sm:block">
-                {(r.confidence * 100).toFixed(0)}%
-              </span>
-            </div>
-          ))}
+          {visible.map((r, i) => <FeedRow key={i} r={r} showDate />)}
           {visible.length === 0 && !loading && (
-            <p className="text-center text-slate-400 text-sm py-12">Sin registros para {date}</p>
+            <p className="text-center text-slate-400 py-16">Sin registros para {date}</p>
           )}
         </div>
       </div>
-      {visible.length > 0 && (
-        <p className="text-xs text-slate-400 text-right">{visible.length} registros</p>
-      )}
     </div>
   );
 }
@@ -254,9 +373,8 @@ function Reconciliacion() {
   const uploadFile = async (file: File) => {
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const r = await fetch(`${API}/api/excel/upload`, { method: "POST", body: fd });
+      const fd = new FormData(); fd.append("file", file);
+      const r = await apiFetch(`${API}/api/excel/upload`, { method: "POST", body: fd });
       if (!r.ok) { alert((await r.json()).detail); return; }
       const data = await r.json();
       setLastImport({ id: data.import_id, filename: data.filename });
@@ -267,9 +385,9 @@ function Reconciliacion() {
   const reconcile = async () => {
     setReconciling(true);
     try {
-      const params = new URLSearchParams({ date });
-      if (lastImport) params.set("import_id", String(lastImport.id));
-      const r = await fetch(`${API}/api/excel/reconcile?${params}`);
+      const p = new URLSearchParams({ date });
+      if (lastImport) p.set("import_id", String(lastImport.id));
+      const r = await apiFetch(`${API}/api/excel/reconcile?${p}`);
       if (r.ok) setResult(await r.json());
     } finally { setReconciling(false); }
   };
@@ -278,128 +396,121 @@ function Reconciliacion() {
 
   return (
     <div className="space-y-5">
-      {/* Upload zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) uploadFile(f); }}
         onClick={() => fileRef.current?.click()}
-        className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center gap-3 cursor-pointer transition-colors
+        className={`border-2 border-dashed rounded-2xl p-8 lg:p-10 flex flex-col items-center gap-3 cursor-pointer transition-colors
           ${dragOver ? "border-indigo-400 bg-indigo-50" : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50"}`}
       >
-        <Upload size={28} className={uploading ? "animate-bounce text-indigo-500" : "text-slate-400"} />
+        <Upload size={32} className={uploading ? "animate-bounce text-indigo-500" : "text-slate-400"} />
         <div className="text-center">
-          <p className="font-semibold text-slate-600 text-sm">
+          <p className="font-semibold text-slate-600">
             {uploading ? "Subiendo..." : "Arrastrá el Excel aquí o hacé click"}
           </p>
           {lastImport
-            ? <p className="text-xs text-indigo-600 mt-1 font-semibold">✓ {lastImport.filename}</p>
-            : <p className="text-xs text-slate-400 mt-1">ventas_DD-MM-YYYY HH_MM_SS.xlsx</p>
+            ? <p className="text-sm text-indigo-600 mt-1 font-semibold">✓ {lastImport.filename}</p>
+            : <p className="text-sm text-slate-400 mt-1">ventas_DD-MM-YYYY HH_MM_SS.xlsx</p>
           }
         </div>
         <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
           onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f); }} />
       </div>
 
-      {/* Fecha + comparar */}
       <div className="flex gap-3">
-        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2 flex-1">
+        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2.5 flex-1">
           <Calendar size={15} className="text-slate-400 shrink-0" />
           <input type="date" value={date} onChange={e => setDate(e.target.value)}
             className="text-sm font-semibold text-slate-700 outline-none bg-transparent w-full" />
         </div>
         <button onClick={reconcile} disabled={reconciling || uploading}
-          className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 rounded-xl text-sm transition-colors">
+          className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-6 rounded-xl text-sm transition-colors">
           {reconciling ? "Comparando..." : "Comparar"}
         </button>
       </div>
 
-      {/* Resultados */}
       {s && (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <div className="bg-rose-50 border border-rose-200 rounded-xl sm:rounded-2xl p-3 sm:p-4">
-              <p className="text-[9px] sm:text-[10px] font-bold text-rose-500 uppercase tracking-widest">Solo cámara</p>
-              <p className="text-2xl sm:text-3xl font-black text-rose-600 mt-1">{s.camera_only}</p>
-              <p className="text-[9px] sm:text-[10px] text-rose-400 mt-1 hidden sm:block">no registrado</p>
+          <div className="grid grid-cols-3 gap-2 lg:gap-4">
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 lg:p-5">
+              <p className="text-[10px] lg:text-xs font-bold text-rose-500 uppercase tracking-widest">Solo cámara</p>
+              <p className="text-2xl lg:text-4xl font-black text-rose-600 mt-1">{s.camera_only}</p>
+              <p className="text-[10px] lg:text-xs text-rose-400 mt-1 hidden sm:block">operador no registró</p>
             </div>
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl sm:rounded-2xl p-3 sm:p-4">
-              <p className="text-[9px] sm:text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Coinciden</p>
-              <p className="text-2xl sm:text-3xl font-black text-emerald-700 mt-1">{s.matched}</p>
-              <p className="text-[9px] sm:text-[10px] text-emerald-500 mt-1 hidden sm:block">${s.excel_revenue.toLocaleString("es-CL")}</p>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 lg:p-5">
+              <p className="text-[10px] lg:text-xs font-bold text-emerald-600 uppercase tracking-widest">Coinciden</p>
+              <p className="text-2xl lg:text-4xl font-black text-emerald-700 mt-1">{s.matched}</p>
+              <p className="text-[10px] lg:text-xs text-emerald-500 mt-1 hidden sm:block">${s.excel_revenue.toLocaleString("es-CL")}</p>
             </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl sm:rounded-2xl p-3 sm:p-4">
-              <p className="text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase tracking-widest">Solo Excel</p>
-              <p className="text-2xl sm:text-3xl font-black text-amber-700 mt-1">{s.excel_only}</p>
-              <p className="text-[9px] sm:text-[10px] text-amber-500 mt-1 hidden sm:block">cámara no vio</p>
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 lg:p-5">
+              <p className="text-[10px] lg:text-xs font-bold text-amber-600 uppercase tracking-widest">Solo Excel</p>
+              <p className="text-2xl lg:text-4xl font-black text-amber-700 mt-1">{s.excel_only}</p>
+              <p className="text-[10px] lg:text-xs text-amber-500 mt-1 hidden sm:block">cámara no detectó</p>
             </div>
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
             <div className="flex border-b border-slate-100">
               {([
-                ["camera_only", "🔴 Solo cámara",  "🔴 Cámara"],
-                ["matched",     "✅ Coinciden",    "✅ Match"],
-                ["excel_only",  "🟡 Solo Excel",   "🟡 Excel"],
-              ] as const).map(([t, label, short]) => (
+                ["camera_only", "🔴 Solo cámara", "🔴"],
+                ["matched",     "✅ Coinciden",   "✅"],
+                ["excel_only",  "🟡 Solo Excel",  "🟡"],
+              ] as const).map(([t, label, icon]) => (
                 <button key={t} onClick={() => setDetailTab(t)}
-                  className={`flex-1 py-3 text-xs font-bold transition-colors ${detailTab === t ? "bg-slate-50 text-slate-900 border-b-2 border-indigo-500" : "text-slate-400 hover:text-slate-600"}`}>
+                  className={`flex-1 py-3 lg:py-4 text-xs lg:text-sm font-bold transition-colors ${detailTab === t ? "bg-slate-50 text-slate-900 border-b-2 border-indigo-500" : "text-slate-400 hover:text-slate-600"}`}>
                   <span className="hidden sm:inline">{label}</span>
-                  <span className="sm:hidden">{short}</span>
+                  <span className="sm:hidden">{icon}</span>
                 </button>
               ))}
             </div>
 
-            <div className="divide-y divide-slate-50 max-h-[420px] overflow-y-auto">
+            <div className="divide-y divide-slate-50 max-h-[480px] lg:max-h-[560px] overflow-y-auto">
               {detailTab === "camera_only" && result!.camera_only.map((r, i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-3">
-                  <PhotoThumb url={r.image_url} plate={r.plate} />
+                <div key={i} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
+                  <PhotoThumb url={r.image_url} plate={r.plate} size="lg" />
                   <div className="flex-1 min-w-0">
-                    <p className="font-black text-slate-900 tracking-widest text-sm font-mono">{r.plate}</p>
-                    <p className="text-xs text-slate-400">{r.camera_time} · {(r.confidence * 100).toFixed(0)}% conf</p>
+                    <p className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">{r.plate}</p>
+                    <p className="text-sm text-slate-400">{r.camera_time} · {(r.confidence * 100).toFixed(0)}% conf</p>
                   </div>
-                  <AlertTriangle size={16} className="text-rose-400 shrink-0" />
+                  <AlertTriangle size={18} className="text-rose-400 shrink-0" />
                 </div>
               ))}
 
               {detailTab === "matched" && result!.matched.map((r, i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-3">
-                  <PhotoThumb url={r.image_url} plate={r.plate} />
+                <div key={i} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
+                  <PhotoThumb url={r.image_url} plate={r.plate} size="lg" />
                   <div className="flex-1 min-w-0">
-                    <p className="font-black text-slate-900 tracking-widest text-sm font-mono">{r.plate}</p>
-                    <p className="text-xs text-slate-400">
+                    <p className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">{r.plate}</p>
+                    <p className="text-sm text-slate-400">
                       cámara {r.camera_time} · Excel {r.excel_ingreso} · Δ{r.diff_minutes}min · {r.operador}
                     </p>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-sm font-bold text-emerald-600">${r.valor.toLocaleString("es-CL")}</p>
-                    <CheckCircle2 size={13} className="text-emerald-400 ml-auto mt-0.5" />
+                    <p className="font-bold text-emerald-600 lg:text-lg">${r.valor.toLocaleString("es-CL")}</p>
+                    <CheckCircle2 size={14} className="text-emerald-400 ml-auto mt-0.5" />
                   </div>
                 </div>
               ))}
 
               {detailTab === "excel_only" && result!.excel_only.map((r, i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-3">
-                  <div className="w-14 h-10 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
-                    <HelpCircle size={16} className="text-amber-400" />
+                <div key={i} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
+                  <div className="w-20 h-14 lg:w-24 lg:h-16 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
+                    <HelpCircle size={20} className="text-amber-400" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-black text-slate-900 tracking-widest text-sm font-mono">{r.plate}</p>
-                    <p className="text-xs text-slate-400">
-                      {r.excel_ingreso} → {r.excel_salida ?? "?"} · {r.operador}
-                    </p>
+                    <p className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">{r.plate}</p>
+                    <p className="text-sm text-slate-400">{r.excel_ingreso} → {r.excel_salida ?? "?"} · {r.operador}</p>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-sm font-bold text-amber-600">${r.valor.toLocaleString("es-CL")}</p>
-                    <p className={`text-[10px] mt-0.5 ${r.estado === "Pagado" ? "text-emerald-500" : "text-rose-500"}`}>
-                      {r.estado}
-                    </p>
+                    <p className="font-bold text-amber-600 lg:text-lg">${r.valor.toLocaleString("es-CL")}</p>
+                    <p className={`text-xs mt-0.5 ${r.estado === "Pagado" ? "text-emerald-500" : "text-rose-500"}`}>{r.estado}</p>
                   </div>
                 </div>
               ))}
 
               {result![detailTab].length === 0 && (
-                <p className="text-center text-slate-400 text-sm py-10">Sin registros en esta categoría</p>
+                <p className="text-center text-slate-400 py-12">Sin registros en esta categoría</p>
               )}
             </div>
           </div>
@@ -412,60 +523,75 @@ function Reconciliacion() {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [auth, setAuthState]  = useState<AuthState>(null);
   const [tab, setTab]         = useState<"dashboard" | "historial" | "reconciliacion">("dashboard");
   const [stats, setStats]     = useState<Stats>({ today_income: 0, today_entries: 0, today_exits: 0, parked_now: 0 });
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const today = format(new Date(), "d 'de' MMMM yyyy", { locale: es });
 
+  // Hydrate auth from localStorage
+  useEffect(() => { setAuthState(getAuth()); }, []);
+
   const refresh = useCallback(async () => {
+    if (!getAuth()) return;
     setLoading(true);
     try {
       const ts = Date.now();
       const [s, h] = await Promise.all([
-        fetch(`${API}/api/stats?t=${ts}`),
-        fetch(`${API}/api/history?t=${ts}&limit=50`),
+        apiFetch(`${API}/api/stats?t=${ts}`),
+        apiFetch(`${API}/api/history?t=${ts}&limit=50`),
       ]);
       if (s.ok) setStats(await s.json());
       if (h.ok) setHistory(await h.json());
+      if (s.status === 401 || h.status === 401) { setAuth(null); setAuthState(null); }
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
+    if (!auth) return;
     refresh();
     const id = setInterval(refresh, 15_000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [auth, refresh]);
+
+  const logout = () => { setAuth(null); setAuthState(null); };
+  const handleLogin = (a: AuthState) => { setAuthState(a); };
+
+  if (!auth) return <LoginPage onLogin={handleLogin} />;
 
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="bg-indigo-600 rounded-xl p-1.5">
-              <Car size={18} className="text-white" />
+        <div className="max-w-7xl mx-auto px-4 lg:px-8 py-3 flex items-center gap-4">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="bg-indigo-600 rounded-xl p-1.5 lg:p-2">
+              <Car size={18} className="text-white lg:hidden" />
+              <Car size={22} className="text-white hidden lg:block" />
             </div>
-            <span className="font-black text-slate-900 hidden xs:block">CentralParking</span>
-            <span className="font-black text-slate-900 xs:hidden">CP</span>
+            <span className="font-black text-slate-900 text-base lg:text-lg">CentralParking</span>
           </div>
-          <p className="text-xs text-slate-400 hidden md:block capitalize flex-1">{today}</p>
-          <nav className="ml-auto flex gap-1">
+          <p className="text-sm text-slate-400 hidden lg:block capitalize flex-1">{today}</p>
+          <nav className="ml-auto flex gap-1 lg:gap-2">
             {([
-              ["dashboard",      "Dashboard", "Inicio"],
-              ["historial",      "Historial", "Historial"],
-              ["reconciliacion", "Excel",     "Excel"],
-            ] as const).map(([t, label, short]) => (
+              ["dashboard",      "Dashboard"],
+              ["historial",      "Historial"],
+              ["reconciliacion", "Excel"],
+            ] as const).map(([t, label]) => (
               <button key={t} onClick={() => setTab(t)}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${tab === t ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}>
-                <span className="hidden sm:inline">{label}</span>
-                <span className="sm:hidden">{short}</span>
+                className={`px-3 lg:px-4 py-1.5 lg:py-2 rounded-lg text-xs lg:text-sm font-bold transition-colors ${tab === t ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}>
+                {label}
               </button>
             ))}
           </nav>
+          <button onClick={logout} title="Cerrar sesión"
+            className="ml-2 p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+            <LogOut size={18} />
+          </button>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <main className="max-w-7xl mx-auto px-4 lg:px-8 py-5 lg:py-8">
         {tab === "dashboard"      && <Dashboard stats={stats} history={history} loading={loading} />}
         {tab === "historial"      && <Historial />}
         {tab === "reconciliacion" && <Reconciliacion />}
