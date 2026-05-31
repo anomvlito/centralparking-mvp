@@ -269,8 +269,8 @@ async def api_staging_status(plate: str):
                 "id":               r["id"],
                 "status":           r["status"],
                 "combined_score":   float(r["combined_score"]),
-                "detected_at":      r["detected_at"].strftime("%Y-%m-%d %H:%M:%S"),
-                "expires_at":       r["expires_at"].strftime("%Y-%m-%d %H:%M:%S"),
+                "detected_at":      r["detected_at"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
+                "expires_at":       r["expires_at"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
                 "rejection_reason": r["rejection_reason"],
             }
             for r in rows
@@ -335,7 +335,7 @@ async def api_audit_log(date: str = None, limit: int = 100):
     return {
         "events": [
             {
-                "logged_at":  r["logged_at"].strftime("%Y-%m-%d %H:%M:%S"),
+                "logged_at":  r["logged_at"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
                 "plate":      r["plate"],
                 "event_type": r["event_type"],
                 "details":    r["details"],

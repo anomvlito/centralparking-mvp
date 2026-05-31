@@ -178,7 +178,7 @@ def get_history(limit: int = 200) -> list:
     result = []
     for r in rows:
         entry = {
-            "timestamp":  r["timestamp"].strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp":  r["timestamp"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
             "plate":      r["plate"],
             "action":     r["action"],
             "status":     r["status"],

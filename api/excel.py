@@ -253,8 +253,8 @@ async def reconcile(date: str, import_id: Optional[int] = None):
             used_excel_ids.add(best_excel["id"])
             matched.append({
                 "plate":              cam["plate"],
-                "camera_time":        cam_time.strftime("%H:%M:%S"),
-                "excel_ingreso":      best_excel["ingreso"].strftime("%H:%M:%S"),
+                "camera_time":        cam_time.astimezone(_CL).strftime("%H:%M:%S"),
+                "excel_ingreso":      best_excel["ingreso"].astimezone(_CL).strftime("%H:%M:%S"),
                 "diff_minutes":       round(best_diff, 1),
                 "confidence":         float(cam["confidence"]),
                 "valor":              float(best_excel["valor"]) if best_excel["valor"] else 0,
@@ -265,7 +265,7 @@ async def reconcile(date: str, import_id: Optional[int] = None):
         else:
             camera_only.append({
                 "plate":      cam["plate"],
-                "camera_time": cam_time.strftime("%H:%M:%S"),
+                "camera_time": cam_time.astimezone(_CL).strftime("%H:%M:%S"),
                 "confidence": float(cam["confidence"]),
                 "image_url":  f"/api/monitor/file/{cam['image_path']}" if cam["image_path"] else None,
             })
