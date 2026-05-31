@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { format } from "date-fns";
+import { format, addDays, subDays, isToday, parseISO } from "date-fns";
 import { es } from "date-fns/locale";
 import {
   Car, AlertTriangle, CheckCircle2, HelpCircle,
   Upload, Calendar, RefreshCw, Image as ImageIcon, X,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 const API = "";
@@ -51,7 +52,7 @@ function PhotoThumb({ url, plate }: { url: string | null; plate: string }) {
   return (
     <>
       <button onClick={() => setOpen(true)} className="shrink-0">
-        <img src={url} alt={plate}
+        <img src={url} alt={plate} loading="lazy"
           className="w-14 h-10 object-cover rounded-lg border border-slate-200 hover:scale-105 transition-transform" />
       </button>
       {open && (
@@ -114,7 +115,12 @@ function Dashboard({ stats, history, loading }: { stats: Stats; history: History
                   <span className="font-black text-slate-900 tracking-widest text-sm font-mono">{r.plate}</span>
                   <ActionBadge action={r.action} />
                 </div>
-                <p className="text-xs text-slate-400 font-mono">{r.timestamp.split(" ")[1]}</p>
+                <p className="text-xs text-slate-400 font-mono">
+                  {r.timestamp.split(" ")[0] !== format(new Date(), "yyyy-MM-dd") && (
+                    <span className="text-slate-300 mr-1">{r.timestamp.split(" ")[0]}</span>
+                  )}
+                  {r.timestamp.split(" ")[1]}
+                </p>
               </div>
               {r.fee > 0 && (
                 <span className="text-sm font-bold text-slate-600 tabular-nums shrink-0">
@@ -161,11 +167,26 @@ function Historial() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2 flex-1 min-w-0">
-          <Calendar size={14} className="text-slate-400 shrink-0" />
-          <input type="date" value={date} onChange={e => setDate(e.target.value)}
-            className="text-sm font-semibold text-slate-700 outline-none bg-transparent w-full min-w-0" />
+        {/* Navegación de fecha */}
+        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl overflow-hidden shrink-0">
+          <button
+            onClick={() => setDate(format(subDays(parseISO(date), 1), "yyyy-MM-dd"))}
+            className="p-2 hover:bg-slate-50 text-slate-400 hover:text-slate-700 transition-colors">
+            <ChevronLeft size={16} />
+          </button>
+          <div className="flex items-center gap-1.5 px-1">
+            <Calendar size={13} className="text-slate-400" />
+            <input type="date" value={date} onChange={e => setDate(e.target.value)}
+              className="text-sm font-semibold text-slate-700 outline-none bg-transparent w-32" />
+          </div>
+          <button
+            onClick={() => setDate(format(addDays(parseISO(date), 1), "yyyy-MM-dd"))}
+            disabled={isToday(parseISO(date))}
+            className="p-2 hover:bg-slate-50 text-slate-400 hover:text-slate-700 disabled:opacity-30 transition-colors">
+            <ChevronRight size={16} />
+          </button>
         </div>
+        {/* Filtro */}
         <div className="flex rounded-xl overflow-hidden border border-slate-200 bg-white shrink-0">
           {(["ALL", "ENTRY", "EXIT"] as const).map(f => (
             <button key={f} onClick={() => setFilter(f)}

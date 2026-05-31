@@ -200,13 +200,15 @@ def get_stats_today() -> dict:
                     COUNT(*) FILTER (WHERE action = 'EXIT')                AS exits,
                     COALESCE(SUM(fee) FILTER (WHERE action = 'EXIT'), 0)   AS revenue
                 FROM detection_log
-                WHERE logged_at >= %s AND status = 'REAL'
+                WHERE logged_at >= %s AND action IN ('ENTRY', 'EXIT')
             """, (today,))
             stats = cur.fetchone()
             cur.execute("""
                 SELECT COUNT(*) AS parked
                 FROM parking_sessions
-                WHERE exit_time IS NULL AND status != 'VOID'
+                WHERE exit_time IS NULL
+                  AND status NOT IN ('VOID', 'AUTO_CLOSED')
+                  AND entry_time > now() - INTERVAL '20 hours'
             """)
             parked = cur.fetchone()
     return {

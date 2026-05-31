@@ -187,12 +187,22 @@ def staging_promote_expired():
 
 
 def staging_cleanup_old():
-    """Elimina registros de staging con más de 24h para no acumular basura."""
+    """Limpia staging viejo y cierra sesiones de parking abiertas > 20h."""
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 DELETE FROM staging_detections
                 WHERE detected_at < now() - INTERVAL '24 hours'
+            """)
+            # Cierre automático de sesiones que llevan más de 20h abiertas
+            cur.execute("""
+                UPDATE parking_sessions
+                SET exit_time = entry_time + INTERVAL '20 hours',
+                    status = 'AUTO_CLOSED',
+                    updated_at = now()
+                WHERE exit_time IS NULL
+                  AND status NOT IN ('VOID', 'AUTO_CLOSED')
+                  AND entry_time < now() - INTERVAL '20 hours'
             """)
 
 

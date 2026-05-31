@@ -338,8 +338,8 @@ async def get_cars():
 
 
 @app.get("/api/history")
-async def api_get_history():
-    return get_history(limit=50)
+async def api_get_history(limit: int = 50):
+    return get_history(limit=min(limit, 2000))
 
 
 @app.post("/api/clear-history")
