@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, LogIn, LogOut, Eye, EyeOff, User,
 } from "lucide-react";
 
-const API = "";
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
