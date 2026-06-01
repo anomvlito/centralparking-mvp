@@ -40,7 +40,7 @@ _JWT_SECRET = os.environ.get("JWT_SECRET", "changeme-set-JWT_SECRET-in-env")
 
 # Rutas que no requieren JWT
 _PUBLIC_PATHS = {"/auth/login", "/docs", "/openapi.json", "/redoc"}
-_PUBLIC_PATH_PREFIXES = {"/api/monitor/file", "/api/monitor/images", "/api/monitor/review"}  # imágenes sin auth
+_PUBLIC_PATH_PREFIXES = {"/api/monitor/file", "/api/monitor/images", "/api/monitor/review", "/api/ftp/"}  # imágenes sin auth
 
 
 @asynccontextmanager
