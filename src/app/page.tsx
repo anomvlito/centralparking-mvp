@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, LogIn, LogOut, Eye, EyeOff, User,
 } from "lucide-react";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "";
+const API = process.env.NEXT_PUBLIC_API_URL || "https://efforts-belts-mountain-tile.trycloudflare.com";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
