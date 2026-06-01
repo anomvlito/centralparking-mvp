@@ -56,34 +56,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="CParking AI Backend", version="2.0", lifespan=lifespan)
 
-
-@app.middleware("http")
-async def security_middleware(request: Request, call_next):
-    from jose import JWTError, jwt as _jwt
-
-    client = request.client.host if request.client else ""
-    is_local = client in ("127.0.0.1", "::1", "localhost")
-    path = request.url.path
-
-    # 1. API key check (externo solamente)
-    if not is_local and _API_KEY:
-        if request.headers.get("X-API-Key", "") != _API_KEY:
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-
-    # 2. JWT check (externo, rutas no públicas)
-    is_public = path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
-    if not is_local and not is_public:
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse({"detail": "Se requiere autenticación"}, status_code=401)
-        try:
-            _jwt.decode(auth_header[7:], _JWT_SECRET, algorithms=["HS256"])
-        except JWTError:
-            return JSONResponse({"detail": "Token inválido o expirado"}, status_code=401)
-
-    return await call_next(request)
-
-
+# CORS middleware PRIMERO (se agrega al inicio)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -93,6 +66,51 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,
 )
+
+
+def _cors_headers() -> dict:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Max-Age": "3600"
+    }
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    from jose import JWTError, jwt as _jwt
+    from fastapi.responses import Response
+
+    # Preflight requests siempre OK
+    if request.method == "OPTIONS":
+        return Response(status_code=200, headers=_cors_headers())
+
+    client = request.client.host if request.client else ""
+    is_local = client in ("127.0.0.1", "::1", "localhost")
+    path = request.url.path
+
+    # 1. API key check (externo solamente)
+    if not is_local and _API_KEY:
+        if request.headers.get("X-API-Key", "") != _API_KEY:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401, headers=_cors_headers())
+
+    # 2. JWT check (externo, rutas no públicas)
+    is_public = path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
+    if not is_local and not is_public:
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse({"detail": "Se requiere autenticación"}, status_code=401, headers=_cors_headers())
+        try:
+            _jwt.decode(auth_header[7:], _JWT_SECRET, algorithms=["HS256"])
+        except JWTError:
+            return JSONResponse({"detail": "Token inválido o expirado"}, status_code=401, headers=_cors_headers())
+
+    response = await call_next(request)
+    # Agregar CORS headers a TODAS las respuestas
+    for key, value in _cors_headers().items():
+        response.headers[key] = value
+    return response
 
 # ─────────────────────────── Motor de IA ───────────────────────────────────
 
