@@ -283,7 +283,7 @@ async def ftp_image(image: UploadFile = File(...)):
     # Return detection result with image path
     detect_result = _handle_auto_detection(
         plate, "image", result["confidence"], result["strategy"],
-        img=img, bbox_width=result.get("bbox_width", 0),
+        img=img, bbox_width=result.get("bbox_width", 0), image_path=image_path,
     )
     detect_result["image_path"] = image_path
     detect_result["image_url"] = f"/api/monitor/file/{image_path}"
