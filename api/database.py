@@ -177,6 +177,10 @@ def get_history(limit: int = 200) -> list:
             rows = cur.fetchall()
     result = []
     for r in rows:
+        # Get backend URL from environment or use default
+        backend_url = os.environ.get("BACKEND_URL", "https://efforts-belts-mountain-tile.trycloudflare.com")
+        image_url = f"{backend_url}/api/monitor/file/{r['image_path']}" if r["image_path"] else None
+
         entry = {
             "timestamp":  r["timestamp"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
             "plate":      r["plate"],
@@ -184,7 +188,7 @@ def get_history(limit: int = 200) -> list:
             "status":     r["status"],
             "fee":        float(r["fee"]),
             "confidence": float(r["confidence"]),
-            "image_url":  f"/api/monitor/file/{r['image_path']}" if r["image_path"] else None,
+            "image_url":  image_url,
         }
         result.append(entry)
     return result
