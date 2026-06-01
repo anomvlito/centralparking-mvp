@@ -159,7 +159,7 @@ def _append_ftp_event(plate: str, source: str, confidence: float, strategy: str,
 
 def _handle_auto_detection(plate: str, source: str, confidence: float,
                             strategy: str, img: np.ndarray = None,
-                            bbox_width: int = 0) -> dict:
+                            bbox_width: int = 0, image_path: str = None) -> dict:
     """
     Lógica central de entrada/salida automática.
 
@@ -183,7 +183,7 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
     # 2. Si la dirección indica alejamiento Y el auto está estacionado → EXIT
     if direction == "DEPARTING" and vehicle_exists(plate):
         remove_vehicle(plate)
-        log_to_csv(plate, "EXIT", status="FTP_AUTO")
+        log_to_csv(plate, "EXIT", status="FTP_AUTO", image_path=image_path)
         _append_ftp_event(plate, source, confidence, strategy, action="EXIT")
         _direction.clear(plate)
         return {"plate": plate, "action": "EXIT", "registered": True,
@@ -199,7 +199,7 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
     # 4. Lógica estándar: si está estacionado → EXIT; si no → staging (ENTRY)
     if vehicle_exists(plate):
         remove_vehicle(plate)
-        log_to_csv(plate, "EXIT", status="FTP_AUTO")
+        log_to_csv(plate, "EXIT", status="FTP_AUTO", image_path=image_path)
         _append_ftp_event(plate, source, confidence, strategy, action="EXIT")
         _direction.clear(plate)
         return {"plate": plate, "action": "EXIT", "registered": True,
@@ -268,10 +268,26 @@ async def ftp_image(image: UploadFile = File(...)):
     if not result:
         return {"plate": None, "registered": False, "error": "no_detection"}
 
-    return _handle_auto_detection(
-        result["plate"], "image", result["confidence"], result["strategy"],
+    plate = result["plate"]
+    now_dt = now_cl()
+    date_str = now_dt.strftime("%Y-%m-%d")
+    time_str = now_dt.strftime("%H-%M-%S")
+
+    # Save image to disk
+    os.makedirs(FTP_ARCHIVE_DIR + "/" + date_str, exist_ok=True)
+    filename = f"{time_str}_{plate}_{date_str}.jpg"
+    filepath = os.path.join(FTP_ARCHIVE_DIR, date_str, filename)
+    cv2.imwrite(filepath, img)
+    image_path = f"historico/{date_str}/{filename}"
+
+    # Return detection result with image path
+    detect_result = _handle_auto_detection(
+        plate, "image", result["confidence"], result["strategy"],
         img=img, bbox_width=result.get("bbox_width", 0),
     )
+    detect_result["image_path"] = image_path
+    detect_result["image_url"] = f"/api/monitor/file/{image_path}"
+    return detect_result
 
 
 class VideoPathRequest(BaseModel):
