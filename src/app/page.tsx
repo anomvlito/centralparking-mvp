@@ -279,7 +279,7 @@ function Dashboard({ stats, history, loading }: { stats: Stats; history: History
           {loading && <RefreshCw size={15} className="animate-spin text-slate-400" />}
         </div>
         <div className="divide-y divide-slate-50 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
-          {history.slice(0, 50).map((r, i) => <FeedRow key={i} r={r} />)}
+          {history.slice(0, 50).map((r) => <FeedRow key={`${r.timestamp}-${r.plate}`} r={r} />)}
           {history.length === 0 && !loading && (
             <p className="text-center text-slate-400 py-16">Sin actividad registrada</p>
           )}
@@ -348,7 +348,7 @@ function Historial() {
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <div className="divide-y divide-slate-50">
-          {visible.map((r, i) => <FeedRow key={i} r={r} showDate />)}
+          {visible.map((r) => <FeedRow key={`${r.timestamp}-${r.plate}`} r={r} showDate />)}
           {visible.length === 0 && !loading && (
             <p className="text-center text-slate-400 py-16">Sin registros para {date}</p>
           )}
@@ -466,8 +466,8 @@ function Reconciliacion() {
             </div>
 
             <div className="divide-y divide-slate-50 max-h-[480px] lg:max-h-[560px] overflow-y-auto">
-              {detailTab === "camera_only" && result!.camera_only.map((r, i) => (
-                <div key={i} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
+              {detailTab === "camera_only" && result!.camera_only.map((r) => (
+                <div key={`camera_${r.plate}_${r.camera_time}`} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
                   <PhotoThumb url={r.image_url} plate={r.plate} size="lg" />
                   <div className="flex-1 min-w-0">
                     <p className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">{r.plate}</p>
@@ -477,8 +477,8 @@ function Reconciliacion() {
                 </div>
               ))}
 
-              {detailTab === "matched" && result!.matched.map((r, i) => (
-                <div key={i} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
+              {detailTab === "matched" && result!.matched.map((r) => (
+                <div key={`matched_${r.plate}_${r.camera_time}`} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
                   <PhotoThumb url={r.image_url} plate={r.plate} size="lg" />
                   <div className="flex-1 min-w-0">
                     <p className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">{r.plate}</p>
@@ -493,8 +493,8 @@ function Reconciliacion() {
                 </div>
               ))}
 
-              {detailTab === "excel_only" && result!.excel_only.map((r, i) => (
-                <div key={i} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
+              {detailTab === "excel_only" && result!.excel_only.map((r) => (
+                <div key={`excel_${r.plate}_${r.excel_ingreso}`} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
                   <div className="w-20 h-14 lg:w-24 lg:h-16 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
                     <HelpCircle size={20} className="text-amber-400" />
                   </div>
