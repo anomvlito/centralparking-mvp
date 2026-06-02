@@ -51,6 +51,31 @@ def init_db():
                     confidence  NUMERIC(5,4)  NOT NULL DEFAULT 1.0
                 )
             """)
+            # Migración: agregar columna image_path a detection_log
+            cur.execute("""
+                ALTER TABLE detection_log
+                ADD COLUMN IF NOT EXISTS image_path VARCHAR(255)
+            """)
+            # Buffer de staging: deduplicación + quality scoring de detecciones
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS staging_detections (
+                    id                  BIGSERIAL    PRIMARY KEY,
+                    detected_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+                    plate               VARCHAR(20)  NOT NULL,
+                    confidence          NUMERIC(5,4) NOT NULL,
+                    quality_score       NUMERIC(5,4),
+                    combined_score      NUMERIC(5,4),
+                    sharpness           NUMERIC(5,4),
+                    contrast_score      NUMERIC(5,4),
+                    brightness_score    NUMERIC(5,4),
+                    ocr_clarity         NUMERIC(5,4),
+                    strategy            VARCHAR(50),
+                    status              VARCHAR(20)  NOT NULL DEFAULT 'pending',
+                    rejection_reason    VARCHAR(100),
+                    expires_at          TIMESTAMPTZ  NOT NULL,
+                    image_path          VARCHAR(255)
+                )
+            """)
             # Migración: agregar columnas de fotos a parking_sessions
             cur.execute("""
                 ALTER TABLE parking_sessions
@@ -71,6 +96,14 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_detection_log_action
                 ON detection_log(action)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_staging_detections_plate_status
+                ON staging_detections(plate, status)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_staging_detections_expires_at
+                ON staging_detections(expires_at)
             """)
 
 

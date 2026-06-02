@@ -182,7 +182,7 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
 
     # 2. Si la dirección indica alejamiento Y el auto está estacionado → EXIT
     if direction == "DEPARTING" and vehicle_exists(plate):
-        remove_vehicle(plate)
+        remove_vehicle(plate, image_path=image_path)
         log_to_csv(plate, "EXIT", status="FTP_AUTO", image_path=image_path)
         _append_ftp_event(plate, source, confidence, strategy, action="EXIT")
         _direction.clear(plate)
@@ -215,7 +215,7 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
             "ocr_clarity":      confidence,
         }
 
-    staging_result = staging_submit(plate, confidence, quality, strategy)
+    staging_result = staging_submit(plate, confidence, quality, strategy, image_path)
     _append_ftp_event(plate, source, confidence, strategy, action="STAGED")
     return {"plate": plate, "action": "STAGED", "registered": False,
             "confidence": confidence, "strategy": strategy,

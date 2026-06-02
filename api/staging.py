@@ -74,7 +74,7 @@ def calculate_quality_score(img: np.ndarray, plate: str, confidence: float) -> d
 # ─────────────────────── Core deduplication ─────────────────────────────────
 
 def staging_submit(plate: str, confidence: float, quality: dict,
-                   strategy: Optional[str] = None) -> dict:
+                   strategy: Optional[str] = None, image_path: Optional[str] = None) -> dict:
     """
     Ingresa una detección al buffer.
     Retorna: {status: 'pending'|'rejected', action_taken, combined_score}
@@ -106,12 +106,12 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                         INSERT INTO staging_detections
                             (plate, confidence, quality_score, combined_score,
                              sharpness, contrast_score, brightness_score, ocr_clarity,
-                             strategy, status, expires_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s)
+                             strategy, status, expires_at, image_path)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)
                     """, (plate, confidence, quality["quality_score"], combined,
                           quality["sharpness"], quality["contrast_score"],
                           quality["brightness_score"], quality["ocr_clarity"],
-                          strategy, expires_at))
+                          strategy, expires_at, image_path))
                     _audit(plate, "SUPERSEDED",
                            {"old_score": float(existing["combined_score"]),
                             "new_score": combined})
@@ -123,12 +123,12 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                         INSERT INTO staging_detections
                             (plate, confidence, quality_score, combined_score,
                              sharpness, contrast_score, brightness_score, ocr_clarity,
-                             strategy, status, rejection_reason, expires_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'rejected','inferior_quality',%s)
+                             strategy, status, rejection_reason, expires_at, image_path)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'rejected','inferior_quality',%s,%s)
                     """, (plate, confidence, quality["quality_score"], combined,
                           quality["sharpness"], quality["contrast_score"],
                           quality["brightness_score"], quality["ocr_clarity"],
-                          strategy, expires_at))
+                          strategy, expires_at, image_path))
                     return {"status": "rejected", "action": "inferior_quality",
                             "combined_score": combined,
                             "best_score": float(existing["combined_score"])}
@@ -138,12 +138,12 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                     INSERT INTO staging_detections
                         (plate, confidence, quality_score, combined_score,
                          sharpness, contrast_score, brightness_score, ocr_clarity,
-                         strategy, status, expires_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s)
+                         strategy, status, expires_at, image_path)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)
                 """, (plate, confidence, quality["quality_score"], combined,
                       quality["sharpness"], quality["contrast_score"],
                       quality["brightness_score"], quality["ocr_clarity"],
-                      strategy, expires_at))
+                      strategy, expires_at, image_path))
                 return {"status": "pending", "action": "first_in_window",
                         "combined_score": combined}
 
