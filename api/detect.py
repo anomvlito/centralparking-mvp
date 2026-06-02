@@ -391,8 +391,8 @@ async def get_cars():
 
 
 @app.get("/api/history")
-async def api_get_history(limit: int = 50):
-    return get_history(limit=min(limit, 2000))
+async def api_get_history(limit: int = 50, date: str = None):
+    return get_history(limit=min(limit, 2000), date=date)
 
 
 @app.post("/api/clear-history")

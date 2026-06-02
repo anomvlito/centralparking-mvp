@@ -174,7 +174,8 @@ def staging_promote_expired():
                     _audit(plate, "PROMOTED_SKIP", {"reason": "already_in_parking"})
                     continue
 
-                upsert_vehicle(plate, now_cl().timestamp() * 1000)
+                upsert_vehicle(plate, now_cl().timestamp() * 1000,
+                               image_path=row["image_path"])
                 log_to_db(plate, "ENTRY", status="STAGING_AUTO",
                           conf=float(row["combined_score"]),
                           image_path=row["image_path"])

@@ -51,6 +51,15 @@ def init_db():
                     confidence  NUMERIC(5,4)  NOT NULL DEFAULT 1.0
                 )
             """)
+            # Migración: agregar columnas de fotos a parking_sessions
+            cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS entry_image_path VARCHAR(255)
+            """)
+            cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS exit_image_path VARCHAR(255)
+            """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_detection_log_plate
                 ON detection_log(plate)
@@ -92,7 +101,7 @@ def load_db() -> dict:
 
 
 def upsert_vehicle(plate: str, entry_time_ms: float,
-                   is_event: bool = False, event_fee=None):
+                   is_event: bool = False, event_fee=None, image_path: str = None):
     entry_dt = datetime.datetime.fromtimestamp(entry_time_ms / 1000, tz=_CL)
     with _db() as conn:
         with conn.cursor() as cur:
@@ -109,26 +118,26 @@ def upsert_vehicle(plate: str, entry_time_ms: float,
             if existing:
                 cur.execute("""
                     UPDATE parking_sessions
-                    SET entry_time = %s, is_event = %s, event_fee = %s, updated_at = now()
+                    SET entry_time = %s, is_event = %s, event_fee = %s, entry_image_path = %s, updated_at = now()
                     WHERE id = %s
-                """, (entry_dt, is_event, event_fee, existing["id"]))
+                """, (entry_dt, is_event, event_fee, image_path, existing["id"]))
             else:
                 cur.execute("""
                     INSERT INTO parking_sessions
-                        (plate, entry_time, is_event, event_fee, source, status)
-                    VALUES (%s, %s, %s, %s, 'camera_auto', 'REAL')
-                """, (plate, entry_dt, is_event, event_fee))
+                        (plate, entry_time, is_event, event_fee, entry_image_path, source, status)
+                    VALUES (%s, %s, %s, %s, %s, 'camera_auto', 'REAL')
+                """, (plate, entry_dt, is_event, event_fee, image_path))
 
 
-def remove_vehicle(plate: str, fee: float = 0):
-    """Cierra la sesión activa registrando la salida y la tarifa."""
+def remove_vehicle(plate: str, fee: float = 0, image_path: str = None):
+    """Cierra la sesión activa registrando la salida, tarifa e imagen."""
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE parking_sessions
-                SET exit_time = now(), fee = %s, updated_at = now()
+                SET exit_time = now(), fee = %s, exit_image_path = %s, updated_at = now()
                 WHERE plate = %s AND exit_time IS NULL AND status != 'VOID'
-            """, (fee or 0, plate))
+            """, (fee or 0, image_path, plate))
 
 
 def void_vehicle(plate: str):
@@ -164,28 +173,74 @@ def log_to_db(plate: str, action: str, status: str = "REAL",
             """, (plate, action, status, fee, conf, image_path))
 
 
-def get_history(limit: int = 200) -> list:
+def get_history(limit: int = 200, date: str = None) -> list:
+    """Lee desde parking_sessions como fuente de verdad: 0 duplicados por diseño."""
     with _db() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT logged_at AS timestamp, plate, action, status,
-                       fee, confidence, image_path
-                FROM detection_log
-                ORDER BY logged_at DESC
-                LIMIT %s
-            """, (limit,))
-            rows = cur.fetchall()
-    result = []
-    for r in rows:
-        # Get backend URL from environment or use default
-        backend_url = os.environ.get("BACKEND_URL", "https://efforts-belts-mountain-tile.trycloudflare.com")
-        image_url = f"{backend_url}/api/monitor/file/{r['image_path']}" if r["image_path"] else None
+            if date:
+                # Filtrado server-side: solo sesiones con entry/exit en esa fecha
+                cur.execute("""
+                    WITH session_events AS (
+                        SELECT id as session_id, plate, entry_time as event_time,
+                               'ENTRY' as action, source, 0::numeric as fee,
+                               COALESCE(ai_confidence, 1.0) as confidence,
+                               entry_image_path as image_path
+                        FROM parking_sessions
+                        WHERE status != 'VOID'
+                          AND (entry_time AT TIME ZONE 'America/Santiago')::date = %s::date
 
+                        UNION ALL
+
+                        SELECT id, plate, exit_time,
+                               'EXIT', source, COALESCE(fee, 0),
+                               COALESCE(ai_confidence, 1.0),
+                               exit_image_path
+                        FROM parking_sessions
+                        WHERE exit_time IS NOT NULL AND status != 'VOID'
+                          AND (exit_time AT TIME ZONE 'America/Santiago')::date = %s::date
+                    )
+                    SELECT session_id, plate, event_time, action, source, fee, confidence, image_path
+                    FROM session_events
+                    ORDER BY event_time DESC
+                    LIMIT %s
+                """, (date, date, limit))
+            else:
+                # Sin filtro de fecha: las sesiones más recientes
+                cur.execute("""
+                    WITH session_events AS (
+                        SELECT id as session_id, plate, entry_time as event_time,
+                               'ENTRY' as action, source, 0::numeric as fee,
+                               COALESCE(ai_confidence, 1.0) as confidence,
+                               entry_image_path as image_path
+                        FROM parking_sessions
+                        WHERE status != 'VOID'
+
+                        UNION ALL
+
+                        SELECT id, plate, exit_time,
+                               'EXIT', source, COALESCE(fee, 0),
+                               COALESCE(ai_confidence, 1.0),
+                               exit_image_path
+                        FROM parking_sessions
+                        WHERE exit_time IS NOT NULL AND status != 'VOID'
+                    )
+                    SELECT session_id, plate, event_time, action, source, fee, confidence, image_path
+                    FROM session_events
+                    ORDER BY event_time DESC
+                    LIMIT %s
+                """, (limit,))
+            rows = cur.fetchall()
+
+    result = []
+    backend_url = os.environ.get("BACKEND_URL", "https://efforts-belts-mountain-tile.trycloudflare.com")
+
+    for r in rows:
+        image_url = f"{backend_url}/api/monitor/file/{r['image_path']}" if r["image_path"] else None
         entry = {
-            "timestamp":  r["timestamp"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp":  r["event_time"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
             "plate":      r["plate"],
             "action":     r["action"],
-            "status":     r["status"],
+            "status":     "FTP_AUTO" if r["source"] == "camera_auto" else "MANUAL",
             "fee":        float(r["fee"]),
             "confidence": float(r["confidence"]),
             "image_url":  image_url,
@@ -198,15 +253,18 @@ def get_stats_today() -> dict:
     today = now_cl().replace(hour=0, minute=0, second=0, microsecond=0)
     with _db() as conn:
         with conn.cursor() as cur:
+            # Contar entries/exits/revenue desde parking_sessions (fuente de verdad)
             cur.execute("""
                 SELECT
-                    COUNT(*) FILTER (WHERE action = 'ENTRY')               AS entries,
-                    COUNT(*) FILTER (WHERE action = 'EXIT')                AS exits,
-                    COALESCE(SUM(fee) FILTER (WHERE action = 'EXIT'), 0)   AS revenue
-                FROM detection_log
-                WHERE logged_at >= %s AND action IN ('ENTRY', 'EXIT')
-            """, (today,))
+                    COUNT(*) FILTER (WHERE entry_time >= %s)                   AS entries,
+                    COUNT(*) FILTER (WHERE exit_time IS NOT NULL AND exit_time >= %s) AS exits,
+                    COALESCE(SUM(fee) FILTER (WHERE exit_time >= %s), 0)        AS revenue
+                FROM parking_sessions
+                WHERE status != 'VOID'
+            """, (today, today, today))
             stats = cur.fetchone()
+
+            # Contar vehículos actualmente estacionados
             cur.execute("""
                 SELECT COUNT(*) AS parked
                 FROM parking_sessions

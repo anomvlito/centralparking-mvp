@@ -196,15 +196,11 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
         return {"plate": plate, "action": "SKIP_DEPARTING", "registered": False,
                 "confidence": confidence, "direction": direction}
 
-    # 4. Lógica estándar: si está estacionado → EXIT; si no → staging (ENTRY)
-    if vehicle_exists(plate):
-        remove_vehicle(plate)
-        log_to_csv(plate, "EXIT", status="FTP_AUTO", image_path=image_path)
-        _append_ftp_event(plate, source, confidence, strategy, action="EXIT")
-        _direction.clear(plate)
-        return {"plate": plate, "action": "EXIT", "registered": True,
-                "confidence": confidence, "strategy": strategy,
-                "direction": direction}
+    # 4. Si UNKNOWN o APPROACHING pero ya está en parking → SKIP (no registrar EXIT)
+    #    (la ráfaga de fotos mientras está quieto no debe generar exits falsos)
+    if (direction == "UNKNOWN" or direction == "APPROACHING") and vehicle_exists(plate):
+        return {"plate": plate, "action": "SKIP_ALREADY_PARKED", "registered": False,
+                "confidence": confidence, "direction": direction}
 
     # 5. Calcular quality score y enviar a staging
     if img is not None:
