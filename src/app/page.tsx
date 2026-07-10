@@ -14,7 +14,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || "https://2.24.69.49.nip.io";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type HistoryEntry = {
-  timestamp: string; plate: string; action: string;
+  session_id: number; timestamp: string; plate: string; action: string;
   status: string; fee: number; confidence: number; image_url: string | null;
 };
 type Stats = {
@@ -217,6 +217,77 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
+function PlateEditor({ row, onSaved }: { row: HistoryEntry; onSaved?: () => void }) {
+  const [chars, setChars] = useState(() => row.plate.split(""));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const inputs = useRef<Array<HTMLInputElement | null>>([]);
+  const slots = Math.min(8, Math.max(6, chars.length));
+
+  useEffect(() => { setChars(row.plate.split("")); setMessage(""); }, [row.plate]);
+
+  const setPlate = (value: string) => {
+    setChars(value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8).split(""));
+    setMessage("");
+  };
+
+  const changeAt = (index: number, value: string) => {
+    const clean = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const next = [...chars];
+    next[index] = clean.slice(-1);
+    setChars(next);
+    setMessage("");
+    if (clean && index < slots - 1) inputs.current[index + 1]?.focus();
+  };
+
+  const save = async () => {
+    const plate = chars.join("");
+    if (plate === row.plate || plate.length < 4) return;
+    setSaving(true); setMessage("");
+    try {
+      const response = await apiFetch(`${API}/api/history/${row.session_id}/plate`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plate }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "No se pudo actualizar");
+      }
+      setMessage("Guardado");
+      onSaved?.();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Error al guardar");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="ml-auto flex flex-col items-end gap-1 shrink-0">
+      <div className="flex items-center gap-1" onPaste={(event) => {
+        event.preventDefault(); setPlate(event.clipboardData.getData("text"));
+      }}>
+        {Array.from({ length: slots }, (_, index) => (
+          <input key={index} ref={(element) => { inputs.current[index] = element; }}
+            value={chars[index] ?? ""} maxLength={1} inputMode="text"
+            aria-label={`Carácter ${index + 1} de la patente`}
+            onChange={(event) => changeAt(index, event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Backspace" && !chars[index] && index > 0) inputs.current[index - 1]?.focus();
+              if (event.key === "Enter") save();
+              if (event.key === "Escape") setPlate(row.plate);
+            }}
+            className="w-7 h-8 lg:w-8 lg:h-9 rounded-md border border-slate-300 bg-white text-center font-black font-mono text-sm lg:text-base uppercase focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none" />
+        ))}
+        <button type="button" onClick={save}
+          disabled={saving || chars.join("") === row.plate || chars.join("").length < 4}
+          className="h-8 lg:h-9 px-2.5 rounded-md bg-indigo-600 text-white text-[10px] lg:text-xs font-bold disabled:opacity-30">
+          {saving ? "..." : "Guardar"}
+        </button>
+      </div>
+      {message && <span className={`text-[10px] ${message === "Guardado" ? "text-emerald-600" : "text-rose-500"}`}>{message}</span>}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent = "text-slate-900" }: {
   label: string; value: string | number; sub?: string; accent?: string;
 }) {
@@ -231,7 +302,9 @@ function StatCard({ label, value, sub, accent = "text-slate-900" }: {
 
 // ─── Feed row (shared by Dashboard and Historial) ─────────────────────────────
 
-function FeedRow({ r, showDate = false }: { r: HistoryEntry; showDate?: boolean }) {
+function FeedRow({ r, showDate = false, onPlateSaved }: {
+  r: HistoryEntry; showDate?: boolean; onPlateSaved?: () => void;
+}) {
   const today = format(new Date(), "yyyy-MM-dd");
   return (
     <div className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
@@ -260,6 +333,7 @@ function FeedRow({ r, showDate = false }: { r: HistoryEntry; showDate?: boolean 
           ${r.fee.toLocaleString("es-CL")}
         </span>
       )}
+      <PlateEditor row={r} onSaved={onPlateSaved} />
       <span className="text-xs text-slate-300 tabular-nums shrink-0 hidden md:block w-10 text-right">
         {(r.confidence * 100).toFixed(0)}%
       </span>
@@ -269,7 +343,9 @@ function FeedRow({ r, showDate = false }: { r: HistoryEntry; showDate?: boolean 
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
-function Dashboard({ stats, history, loading }: { stats: Stats; history: HistoryEntry[]; loading: boolean }) {
+function Dashboard({ stats, history, loading, onPlateSaved }: {
+  stats: Stats; history: HistoryEntry[]; loading: boolean; onPlateSaved: () => void;
+}) {
   return (
     <div className="space-y-5 lg:space-y-0 lg:grid lg:grid-cols-[300px_1fr] lg:gap-6">
 
@@ -309,7 +385,7 @@ function Dashboard({ stats, history, loading }: { stats: Stats; history: History
         </div>
         <div className="divide-y divide-slate-50 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
           {history.filter(r => r.status !== "AUTO_CLOSED").slice(0, 50).map((r) => (
-            <FeedRow key={`${r.timestamp}-${r.plate}-${r.action}`} r={r} />
+            <FeedRow key={`${r.session_id}-${r.action}`} r={r} onPlateSaved={onPlateSaved} />
           ))}
           {history.length === 0 && !loading && (
             <p className="text-center text-slate-400 py-16">Sin actividad registrada</p>
@@ -379,7 +455,7 @@ function Historial() {
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <div className="divide-y divide-slate-50">
-          {visible.map((r) => <FeedRow key={`${r.timestamp}-${r.plate}`} r={r} showDate />)}
+          {visible.map((r) => <FeedRow key={`${r.session_id}-${r.action}`} r={r} showDate onPlateSaved={load} />)}
           {visible.length === 0 && !loading && (
             <p className="text-center text-slate-400 py-16">Sin registros para {date}</p>
           )}
@@ -623,7 +699,7 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-5 lg:py-8">
-        {tab === "dashboard"      && <Dashboard stats={stats} history={history} loading={loading} />}
+        {tab === "dashboard"      && <Dashboard stats={stats} history={history} loading={loading} onPlateSaved={refresh} />}
         {tab === "historial"      && <Historial />}
         {tab === "reconciliacion" && <Reconciliacion />}
       </main>
