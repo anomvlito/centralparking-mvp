@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, LogIn, LogOut, Eye, EyeOff, User,
 } from "lucide-react";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "https://efforts-belts-mountain-tile.trycloudflare.com";
+const API = process.env.NEXT_PUBLIC_API_URL || "https://2.24.69.49.nip.io";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -139,22 +139,51 @@ function LoginPage({ onLogin }: { onLogin: (auth: AuthState) => void }) {
 
 // ─── Shared components ────────────────────────────────────────────────────────
 
-function PhotoThumb({ url, plate, size = "sm" }: { url: string | null; plate: string; size?: "sm" | "lg" }) {
+function PhotoThumb({ url, plate, status, size = "sm" }: {
+  url: string | null; plate: string; status?: string; size?: "sm" | "lg";
+}) {
   const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const cls = size === "lg"
     ? "w-20 h-14 lg:w-24 lg:h-16"
     : "w-14 h-10";
 
+  useEffect(() => {
+    setLoaded(false);
+    setFailed(false);
+    setAttempt(0);
+  }, [url]);
+
   if (!url) return (
-    <div className={`${cls} rounded-xl bg-slate-100 flex items-center justify-center shrink-0`}>
-      <ImageIcon size={size === "lg" ? 20 : 15} className="text-slate-300" />
+    <div title={status === "AUTO_CLOSED" ? "Cierre automático sin captura" : "Sin imagen asociada"}
+      className={`${cls} rounded-xl bg-slate-100 flex flex-col items-center justify-center shrink-0 px-1`}>
+      <ImageIcon size={size === "lg" ? 18 : 14} className="text-slate-300" />
+      {size === "lg" && (
+        <span className="text-[8px] leading-tight text-slate-400 text-center mt-0.5">
+          {status === "AUTO_CLOSED" ? "Cierre automático" : "Sin captura"}
+        </span>
+      )}
     </div>
   );
+
+  if (failed) return (
+    <button type="button" title="Reintentar cargar imagen"
+      onClick={() => { setFailed(false); setLoaded(false); setAttempt(value => value + 1); }}
+      className={`${cls} rounded-xl bg-rose-50 border border-rose-100 flex flex-col items-center justify-center shrink-0`}>
+      <AlertTriangle size={size === "lg" ? 17 : 14} className="text-rose-400" />
+      {size === "lg" && <span className="text-[8px] text-rose-500 mt-0.5">Reintentar</span>}
+    </button>
+  );
+
   return (
     <>
-      <button onClick={() => setOpen(true)} className="shrink-0">
-        <img src={url} alt={plate} loading="lazy"
-          className={`${cls} object-cover rounded-xl border border-slate-200 hover:scale-105 transition-transform cursor-zoom-in`} />
+      <button onClick={() => loaded && setOpen(true)} className={`${cls} relative shrink-0`} disabled={!loaded}>
+        {!loaded && <span className="absolute inset-0 rounded-xl bg-slate-100 animate-pulse" aria-label="Cargando imagen" />}
+        <img key={attempt} src={url} alt={`Captura de patente ${plate}`} loading="lazy" decoding="async"
+          onLoad={() => setLoaded(true)} onError={() => setFailed(true)}
+          className={`${cls} object-cover rounded-xl border border-slate-200 hover:scale-105 transition-all cursor-zoom-in ${loaded ? "opacity-100" : "opacity-0"}`} />
       </button>
       {open && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
@@ -206,7 +235,7 @@ function FeedRow({ r, showDate = false }: { r: HistoryEntry; showDate?: boolean 
   const today = format(new Date(), "yyyy-MM-dd");
   return (
     <div className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
-      <PhotoThumb url={r.image_url} plate={r.plate} size="lg" />
+      <PhotoThumb url={r.image_url} plate={r.plate} status={r.status} size="lg" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">
@@ -215,7 +244,7 @@ function FeedRow({ r, showDate = false }: { r: HistoryEntry; showDate?: boolean 
           <ActionBadge action={r.action} />
           {r.status && r.status !== "REAL" && (
             <span className="text-[10px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded hidden sm:inline">
-              {r.status}
+              {r.status === "AUTO_CLOSED" ? "Cierre automático" : r.status}
             </span>
           )}
         </div>
@@ -279,7 +308,9 @@ function Dashboard({ stats, history, loading }: { stats: Stats; history: History
           {loading && <RefreshCw size={15} className="animate-spin text-slate-400" />}
         </div>
         <div className="divide-y divide-slate-50 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
-          {history.slice(0, 50).map((r) => <FeedRow key={`${r.timestamp}-${r.plate}`} r={r} />)}
+          {history.filter(r => r.status !== "AUTO_CLOSED").slice(0, 50).map((r) => (
+            <FeedRow key={`${r.timestamp}-${r.plate}-${r.action}`} r={r} />
+          ))}
           {history.length === 0 && !loading && (
             <p className="text-center text-slate-400 py-16">Sin actividad registrada</p>
           )}
