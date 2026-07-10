@@ -262,6 +262,7 @@ function PlateEditor({ row, onSaved }: { row: HistoryEntry; onSaved?: () => void
 
   return (
     <div className="ml-auto flex flex-col items-end gap-1 shrink-0">
+      <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Editar patente</span>
       <div className="flex items-center gap-1" onPaste={(event) => {
         event.preventDefault(); setPlate(event.clipboardData.getData("text"));
       }}>
