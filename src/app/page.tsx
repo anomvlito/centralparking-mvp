@@ -139,8 +139,9 @@ function LoginPage({ onLogin }: { onLogin: (auth: AuthState) => void }) {
 
 // ─── Shared components ────────────────────────────────────────────────────────
 
-function PhotoThumb({ url, plate, status, size = "sm" }: {
+function PhotoThumb({ url, plate, status, size = "sm", editableRow, onPlateSaved }: {
   url: string | null; plate: string; status?: string; size?: "sm" | "lg";
+  editableRow?: HistoryEntry; onPlateSaved?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -179,22 +180,34 @@ function PhotoThumb({ url, plate, status, size = "sm" }: {
 
   return (
     <>
-      <button onClick={() => loaded && setOpen(true)} className={`${cls} relative shrink-0`} disabled={!loaded}>
+      <button onClick={() => loaded && setOpen(true)} className={`${cls} relative shrink-0 group`} disabled={!loaded} title="Ampliar y editar">
         {!loaded && <span className="absolute inset-0 rounded-xl bg-slate-100 animate-pulse" aria-label="Cargando imagen" />}
         <img key={attempt} src={url} alt={`Captura de patente ${plate}`} loading="lazy" decoding="async"
           onLoad={() => setLoaded(true)} onError={() => setFailed(true)}
-          className={`${cls} object-cover rounded-xl border border-slate-200 hover:scale-105 transition-all cursor-zoom-in ${loaded ? "opacity-100" : "opacity-0"}`} />
+          className={`${cls} object-cover rounded-xl border border-slate-200 group-hover:scale-105 transition-all cursor-zoom-in ${loaded ? "opacity-100" : "opacity-0"}`} />
+        {loaded && editableRow && (
+          <div className="absolute -bottom-1 -right-1 bg-indigo-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm">
+            <span className="text-[10px] leading-none">✏️</span>
+          </div>
+        )}
       </button>
       {open && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 lg:p-8"
           onClick={() => setOpen(false)}>
-          <div className="relative max-w-3xl w-full" onClick={e => e.stopPropagation()}>
+          <div className="relative max-w-4xl w-full flex flex-col items-center" onClick={e => e.stopPropagation()}>
             <button onClick={() => setOpen(false)}
-              className="absolute -top-4 -right-4 bg-white rounded-full p-1.5 shadow-lg z-10">
-              <X size={18} />
+              className="absolute -top-4 -right-4 lg:-right-8 lg:-top-4 bg-white text-slate-900 rounded-full p-2 shadow-lg z-10 hover:scale-110 transition-transform">
+              <X size={20} />
             </button>
-            <img src={url} alt={plate} className="w-full rounded-2xl shadow-2xl" />
-            <p className="text-center text-white font-black text-2xl mt-4 tracking-widest font-mono">{plate}</p>
+            <img src={url} alt={plate} className="w-full rounded-2xl shadow-2xl mb-6 max-h-[60vh] object-contain bg-black/40" />
+            
+            {editableRow ? (
+              <div className="bg-white/10 p-5 lg:p-6 rounded-3xl backdrop-blur-md border border-white/20 shadow-xl w-full max-w-xl">
+                <PlateEditor row={editableRow} onSaved={() => { setOpen(false); onPlateSaved?.(); }} />
+              </div>
+            ) : (
+              <p className="text-center text-white font-black text-3xl tracking-widest font-mono drop-shadow-lg">{plate}</p>
+            )}
           </div>
         </div>
       )}
@@ -261,9 +274,8 @@ function PlateEditor({ row, onSaved }: { row: HistoryEntry; onSaved?: () => void
   };
 
   return (
-    <div className="ml-auto flex flex-col items-end gap-1 shrink-0">
-      <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Editar patente</span>
-      <div className="flex items-center gap-1" onPaste={(event) => {
+    <div className="flex flex-col items-center gap-4">
+      <div className="flex items-center gap-1.5 sm:gap-2" onPaste={(event) => {
         event.preventDefault(); setPlate(event.clipboardData.getData("text"));
       }}>
         {Array.from({ length: slots }, (_, index) => (
@@ -276,15 +288,23 @@ function PlateEditor({ row, onSaved }: { row: HistoryEntry; onSaved?: () => void
               if (event.key === "Enter") save();
               if (event.key === "Escape") setPlate(row.plate);
             }}
-            className="w-7 h-8 lg:w-8 lg:h-9 rounded-md border border-slate-300 bg-white text-center font-black font-mono text-sm lg:text-base uppercase focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none" />
+            className="w-10 h-12 lg:w-14 lg:h-16 rounded-xl border-2 border-white/20 bg-white/90 text-center font-black font-mono text-xl lg:text-3xl uppercase focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/30 outline-none shadow-inner text-slate-800 transition-all" />
         ))}
+      </div>
+      <div className="flex items-center justify-center gap-3 w-full">
+        {chars.join("") !== row.plate && (
+          <button type="button" onClick={() => setPlate(row.plate)}
+            className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-sm transition-colors">
+            Restaurar
+          </button>
+        )}
         <button type="button" onClick={save}
           disabled={saving || chars.join("") === row.plate || chars.join("").length < 4}
-          className="h-8 lg:h-9 px-2.5 rounded-md bg-indigo-600 text-white text-[10px] lg:text-xs font-bold disabled:opacity-30">
-          {saving ? "..." : "Guardar"}
+          className="px-6 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:hover:bg-indigo-500 text-white font-black text-sm shadow-lg transition-all flex-1 max-w-[200px]">
+          {saving ? "Guardando..." : "Guardar Patente"}
         </button>
       </div>
-      {message && <span className={`text-[10px] ${message === "Guardado" ? "text-emerald-600" : "text-rose-500"}`}>{message}</span>}
+      {message && <span className={`text-sm font-bold ${message === "Guardado" ? "text-emerald-400" : "text-rose-400"}`}>{message}</span>}
     </div>
   );
 }
@@ -308,11 +328,11 @@ function FeedRow({ r, showDate = false, onPlateSaved }: {
 }) {
   const today = format(new Date(), "yyyy-MM-dd");
   return (
-    <div className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4">
-      <PhotoThumb url={r.image_url} plate={r.plate} status={r.status} size="lg" />
+    <div className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4 hover:bg-slate-50/50 transition-colors group">
+      <PhotoThumb url={r.image_url} plate={r.plate} status={r.status} size="lg" editableRow={r} onPlateSaved={onPlateSaved} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono">
+          <span className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono transition-colors">
             {r.plate}
           </span>
           <ActionBadge action={r.action} />
@@ -334,8 +354,7 @@ function FeedRow({ r, showDate = false, onPlateSaved }: {
           ${r.fee.toLocaleString("es-CL")}
         </span>
       )}
-      <PlateEditor row={r} onSaved={onPlateSaved} />
-      <span className="text-xs text-slate-300 tabular-nums shrink-0 hidden md:block w-10 text-right">
+      <span className="text-xs text-slate-300 tabular-nums shrink-0 hidden md:block w-10 text-right ml-auto">
         {(r.confidence * 100).toFixed(0)}%
       </span>
     </div>
