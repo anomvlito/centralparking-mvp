@@ -22,7 +22,7 @@ import statistics
 import cv2
 import numpy as np
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -33,9 +33,7 @@ _API_KEY = os.environ.get("API_KEY", "")
 from api.database import (
     init_db, load_db, upsert_vehicle, remove_vehicle, void_vehicle, vehicle_exists,
     log_to_db as log_to_csv, get_history, get_stats_today, clear_history, now_cl,
-    correct_session_plate,
 )
-from api.auth import require_admin
 
 
 _JWT_SECRET = os.environ.get("JWT_SECRET", "changeme-set-JWT_SECRET-in-env")
@@ -63,7 +61,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
     max_age=3600,
@@ -73,7 +71,7 @@ app.add_middleware(
 def _cors_headers() -> dict:
     return {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Max-Age": "3600"
     }
@@ -385,10 +383,6 @@ class CarEntry(BaseModel):
     isEvent: bool = False
     eventFee: Optional[float] = None
 
-
-class PlateCorrectionRequest(BaseModel):
-    plate: str
-
 # ─────────────────────────── Endpoints ─────────────────────────────────────
 
 @app.get("/api/cars")
@@ -399,17 +393,6 @@ async def get_cars():
 @app.get("/api/history")
 async def api_get_history(limit: int = 50, date: str = None):
     return get_history(limit=min(limit, 2000), date=date)
-
-
-@app.patch("/api/history/{session_id}/plate")
-async def api_correct_plate(session_id: int, req: PlateCorrectionRequest,
-                            user: dict = Depends(require_admin)):
-    try:
-        return correct_session_plate(session_id, req.plate, user["username"])
-    except LookupError as exc:
-        raise HTTPException(404, str(exc))
-    except (ValueError, FileExistsError) as exc:
-        raise HTTPException(409, str(exc))
 
 
 @app.post("/api/clear-history")
@@ -499,3 +482,4 @@ app.include_router(excel_router)
 # Register auth
 from .auth import router as auth_router
 app.include_router(auth_router)
+
