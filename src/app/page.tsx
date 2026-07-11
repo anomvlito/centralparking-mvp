@@ -43,15 +43,20 @@ function setAuth(auth: AuthState) {
   else localStorage.removeItem("cp_auth");
 }
 
-function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const auth = getAuth();
-  return fetch(url, {
+  const response = await fetch(url, {
     ...options,
     headers: {
       ...(options.headers || {}),
       ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}),
     },
   });
+  if (response.status === 401) {
+    setAuth(null);
+    window.dispatchEvent(new CustomEvent("cp-auth-expired"));
+  }
+  return response;
 }
 
 // ─── Login page ───────────────────────────────────────────────────────────────
@@ -657,8 +662,16 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const today = format(new Date(), "d 'de' MMMM yyyy", { locale: es });
 
-  // Hydrate auth from localStorage
-  useEffect(() => { setAuthState(getAuth()); }, []);
+  // Hydrate auth and recover cleanly when the backend rejects an expired token.
+  useEffect(() => {
+    setAuthState(getAuth());
+    const expired = () => {
+      setAuthState(null);
+      window.alert("Tu sesión expiró. Ingresa nuevamente para continuar.");
+    };
+    window.addEventListener("cp-auth-expired", expired);
+    return () => window.removeEventListener("cp-auth-expired", expired);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!getAuth()) return;
