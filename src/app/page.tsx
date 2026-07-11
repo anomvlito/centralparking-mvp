@@ -15,7 +15,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || "https://2.24.69.49.nip.io";
 
 type HistoryEntry = {
   session_id: number; timestamp: string; plate: string; action: string;
-  status: string; fee: number; confidence: number; image_url: string | null;
+  status: string; review_status: string; fee: number; confidence: number; image_url: string | null;
 };
 type Stats = {
   today_income: number; today_entries: number;
@@ -209,6 +209,9 @@ function PhotoThumb({ url, plate, status, size = "sm", editableRow, onPlateSaved
             {editableRow ? (
               <div className="bg-white/10 p-5 lg:p-6 rounded-3xl backdrop-blur-md border border-white/20 shadow-xl w-full max-w-xl">
                 <PlateEditor row={editableRow} onSaved={() => { setOpen(false); onPlateSaved?.(); }} />
+                <div className="mt-4 pt-4 border-t border-white/20">
+                  <ReviewButtons row={editableRow} onSaved={() => { setOpen(false); onPlateSaved?.(); }} dark />
+                </div>
               </div>
             ) : (
               <p className="text-center text-white font-black text-3xl tracking-widest font-mono drop-shadow-lg">{plate}</p>
@@ -322,6 +325,47 @@ function PlateEditor({ row, onSaved, compact = false }: {
   );
 }
 
+function ReviewButtons({ row, onSaved, dark = false }: {
+  row: HistoryEntry; onSaved?: () => void; dark?: boolean;
+}) {
+  const [saving, setSaving] = useState<"PLATE_OK" | "DUPLICATE" | null>(null);
+  const [error, setError] = useState("");
+
+  const update = async (status: "PLATE_OK" | "DUPLICATE") => {
+    if (status === "DUPLICATE" && !window.confirm(`¿Quitar ${row.plate} por ser una detección duplicada?`)) return;
+    setSaving(status); setError("");
+    try {
+      const response = await apiFetch(`${API}/api/history/${row.session_id}/review`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "No se pudo guardar el estado");
+      }
+      onSaved?.();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Error al guardar");
+    } finally { setSaving(null); }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <button type="button" onClick={() => update("PLATE_OK")}
+        disabled={saving !== null || row.review_status === "PLATE_OK"}
+        className={`h-9 px-3 rounded-lg text-xs font-black transition-colors disabled:opacity-70 ${row.review_status === "PLATE_OK"
+          ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"}`}>
+        {saving === "PLATE_OK" ? "Guardando..." : row.review_status === "PLATE_OK" ? "✓ Patente OK" : "Patente OK"}
+      </button>
+      <button type="button" onClick={() => update("DUPLICATE")} disabled={saving !== null}
+        className="h-9 px-3 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200 text-xs font-black disabled:opacity-50">
+        {saving === "DUPLICATE" ? "Quitando..." : "Duplicada"}
+      </button>
+      {error && <span className={`w-full text-right text-[10px] ${dark ? "text-rose-300" : "text-rose-500"}`}>{error}</span>}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent = "text-slate-900" }: {
   label: string; value: string | number; sub?: string; accent?: string;
 }) {
@@ -370,6 +414,7 @@ function FeedRow({ r, showDate = false, onPlateSaved }: {
       <div className="w-full lg:w-auto lg:ml-auto flex justify-end border-t border-slate-100 lg:border-0 pt-2 lg:pt-0">
         <PlateEditor row={r} onSaved={onPlateSaved} compact />
       </div>
+      <ReviewButtons row={r} onSaved={onPlateSaved} />
       <span className="text-xs text-slate-300 tabular-nums shrink-0 hidden md:block w-10 text-right ml-auto">
         {(r.confidence * 100).toFixed(0)}%
       </span>
