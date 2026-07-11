@@ -235,7 +235,9 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
-function PlateEditor({ row, onSaved }: { row: HistoryEntry; onSaved?: () => void }) {
+function PlateEditor({ row, onSaved, compact = false }: {
+  row: HistoryEntry; onSaved?: () => void; compact?: boolean;
+}) {
   const [chars, setChars] = useState(() => row.plate.split(""));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -279,8 +281,8 @@ function PlateEditor({ row, onSaved }: { row: HistoryEntry; onSaved?: () => void
   };
 
   return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="flex items-center gap-1.5 sm:gap-2" onPaste={(event) => {
+    <div className={`flex items-center ${compact ? "gap-2" : "flex-col gap-4"}`}>
+      <div className={`flex items-center ${compact ? "gap-1" : "gap-1.5 sm:gap-2"}`} onPaste={(event) => {
         event.preventDefault(); setPlate(event.clipboardData.getData("text"));
       }}>
         {Array.from({ length: slots }, (_, index) => (
@@ -293,23 +295,29 @@ function PlateEditor({ row, onSaved }: { row: HistoryEntry; onSaved?: () => void
               if (event.key === "Enter") save();
               if (event.key === "Escape") setPlate(row.plate);
             }}
-            className="w-10 h-12 lg:w-14 lg:h-16 rounded-xl border-2 border-white/20 bg-white/90 text-center font-black font-mono text-xl lg:text-3xl uppercase focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/30 outline-none shadow-inner text-slate-800 transition-all" />
+            className={compact
+              ? "w-7 h-8 lg:w-8 lg:h-9 rounded-md border border-slate-300 bg-white text-center font-black font-mono text-sm lg:text-base uppercase focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800"
+              : "w-10 h-12 lg:w-14 lg:h-16 rounded-xl border-2 border-white/20 bg-white/90 text-center font-black font-mono text-xl lg:text-3xl uppercase focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/30 outline-none shadow-inner text-slate-800 transition-all"} />
         ))}
       </div>
-      <div className="flex items-center justify-center gap-3 w-full">
+      <div className={`flex items-center justify-center ${compact ? "gap-1" : "gap-3 w-full"}`}>
         {chars.join("") !== row.plate && (
           <button type="button" onClick={() => setPlate(row.plate)}
-            className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-sm transition-colors">
-            Restaurar
+            className={compact
+              ? "h-8 lg:h-9 px-2 rounded-md border border-slate-200 text-slate-500 font-bold text-xs hover:bg-slate-50"
+              : "px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-sm transition-colors"}>
+            {compact ? "↶" : "Restaurar"}
           </button>
         )}
         <button type="button" onClick={save}
           disabled={saving || chars.join("") === row.plate || chars.join("").length < 4}
-          className="px-6 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:hover:bg-indigo-500 text-white font-black text-sm shadow-lg transition-all flex-1 max-w-[200px]">
-          {saving ? "Guardando..." : "Guardar Patente"}
+          className={compact
+            ? "h-8 lg:h-9 px-2.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white font-bold text-[10px] lg:text-xs"
+            : "px-6 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:hover:bg-indigo-500 text-white font-black text-sm shadow-lg transition-all flex-1 max-w-[200px]"}>
+          {saving ? (compact ? "..." : "Guardando...") : (compact ? "Guardar" : "Guardar Patente")}
         </button>
       </div>
-      {message && <span className={`text-sm font-bold ${message === "Guardado" ? "text-emerald-400" : "text-rose-400"}`}>{message}</span>}
+      {message && <span className={`${compact ? "text-[10px]" : "text-sm font-bold"} ${message === "Guardado" ? "text-emerald-500" : "text-rose-500"}`}>{message}</span>}
     </div>
   );
 }
@@ -333,7 +341,7 @@ function FeedRow({ r, showDate = false, onPlateSaved }: {
 }) {
   const today = format(new Date(), "yyyy-MM-dd");
   return (
-    <div className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4 hover:bg-slate-50/50 transition-colors group">
+    <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4 hover:bg-slate-50/50 transition-colors group">
       <PhotoThumb url={r.image_url} plate={r.plate} status={r.status} size="lg" editableRow={r} onPlateSaved={onPlateSaved} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
@@ -359,6 +367,9 @@ function FeedRow({ r, showDate = false, onPlateSaved }: {
           ${r.fee.toLocaleString("es-CL")}
         </span>
       )}
+      <div className="w-full lg:w-auto lg:ml-auto flex justify-end border-t border-slate-100 lg:border-0 pt-2 lg:pt-0">
+        <PlateEditor row={r} onSaved={onPlateSaved} compact />
+      </div>
       <span className="text-xs text-slate-300 tabular-nums shrink-0 hidden md:block w-10 text-right ml-auto">
         {(r.confidence * 100).toFixed(0)}%
       </span>
