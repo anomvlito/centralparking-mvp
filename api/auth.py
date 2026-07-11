@@ -29,7 +29,7 @@ _bearer = HTTPBearer(auto_error=False)
 
 SECRET_KEY = os.environ.get("JWT_SECRET", "changeme-set-JWT_SECRET-in-env")
 ALGORITHM  = "HS256"
-TOKEN_HOURS = 8
+TOKEN_HOURS = 24 * 7
 
 
 # ─────────────────────── JWT utils ──────────────────────────────────────────
