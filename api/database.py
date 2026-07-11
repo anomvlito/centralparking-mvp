@@ -88,6 +88,15 @@ def init_db():
                 ADD COLUMN IF NOT EXISTS exit_image_path VARCHAR(255)
             """)
             cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+            """)
+            cur.execute("ALTER TABLE parking_sessions ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ")
+            cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id)
+            """)
+            cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_detection_log_plate
                 ON detection_log(plate)
             """)
@@ -219,7 +228,8 @@ def get_history(limit: int = 200, date: str = None) -> list:
                         SELECT id as session_id, plate, entry_time as event_time,
                                'ENTRY' as action, source, 0::numeric as fee,
                                COALESCE(ai_confidence, 1.0) as confidence,
-                               entry_image_path as image_path, status as session_status
+                               entry_image_path as image_path, status as session_status,
+                               review_status
                         FROM parking_sessions
                         WHERE status != 'VOID'
                           AND (entry_time AT TIME ZONE 'America/Santiago')::date = %s::date
@@ -229,12 +239,12 @@ def get_history(limit: int = 200, date: str = None) -> list:
                         SELECT id, plate, exit_time,
                                'EXIT', source, COALESCE(fee, 0),
                                COALESCE(ai_confidence, 1.0),
-                               exit_image_path, status
+                               exit_image_path, status, review_status
                         FROM parking_sessions
                         WHERE exit_time IS NOT NULL AND status != 'VOID'
                           AND (exit_time AT TIME ZONE 'America/Santiago')::date = %s::date
                     )
-                    SELECT session_id, plate, event_time, action, source, fee, confidence, image_path, session_status
+                    SELECT session_id, plate, event_time, action, source, fee, confidence, image_path, session_status, review_status
                     FROM session_events
                     ORDER BY event_time DESC
                     LIMIT %s
@@ -246,7 +256,8 @@ def get_history(limit: int = 200, date: str = None) -> list:
                         SELECT id as session_id, plate, entry_time as event_time,
                                'ENTRY' as action, source, 0::numeric as fee,
                                COALESCE(ai_confidence, 1.0) as confidence,
-                               entry_image_path as image_path, status as session_status
+                               entry_image_path as image_path, status as session_status,
+                               review_status
                         FROM parking_sessions
                         WHERE status != 'VOID'
 
@@ -255,11 +266,11 @@ def get_history(limit: int = 200, date: str = None) -> list:
                         SELECT id, plate, exit_time,
                                'EXIT', source, COALESCE(fee, 0),
                                COALESCE(ai_confidence, 1.0),
-                               exit_image_path, status
+                               exit_image_path, status, review_status
                         FROM parking_sessions
                         WHERE exit_time IS NOT NULL AND status != 'VOID'
                     )
-                    SELECT session_id, plate, event_time, action, source, fee, confidence, image_path, session_status
+                    SELECT session_id, plate, event_time, action, source, fee, confidence, image_path, session_status, review_status
                     FROM session_events
                     ORDER BY event_time DESC
                     LIMIT %s
@@ -281,9 +292,35 @@ def get_history(limit: int = 200, date: str = None) -> list:
             "fee":        float(r["fee"]),
             "confidence": float(r["confidence"]),
             "image_url":  image_url,
+            "review_status": r["review_status"],
         }
         result.append(entry)
     return result
+
+
+def review_session(session_id: int, review_status: str, user_id: int, username: str) -> dict:
+    if review_status not in {"PLATE_OK", "DUPLICATE"}:
+        raise ValueError("Estado de revisión inválido")
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT plate, status FROM parking_sessions WHERE id = %s FOR UPDATE", (session_id,))
+            row = cur.fetchone()
+            if not row:
+                raise LookupError("Sesión no encontrada")
+            status = "VOID" if review_status == "DUPLICATE" else row["status"]
+            cur.execute("""
+                UPDATE parking_sessions
+                SET review_status = %s, reviewed_at = now(), reviewed_by = %s, status = %s
+                WHERE id = %s
+            """, (review_status, user_id, status, session_id))
+            details = json.dumps({"session_id": session_id, "review_status": review_status,
+                                  "reviewed_by": username})
+            cur.execute("""
+                INSERT INTO audit_log (plate, event_type, details)
+                VALUES (%s, 'REVIEW_STATUS', %s::jsonb)
+            """, (row["plate"], details))
+    return {"session_id": session_id, "plate": row["plate"],
+            "review_status": review_status, "removed": review_status == "DUPLICATE"}
 
 
 def correct_session_plate(session_id: int, new_plate: str, changed_by: str) -> dict:

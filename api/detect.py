@@ -33,7 +33,7 @@ _API_KEY = os.environ.get("API_KEY", "")
 from api.database import (
     init_db, load_db, upsert_vehicle, remove_vehicle, void_vehicle, vehicle_exists,
     log_to_db as log_to_csv, get_history, get_stats_today, clear_history, now_cl,
-    correct_session_plate,
+    correct_session_plate, review_session,
 )
 from api.auth import require_admin
 
@@ -389,6 +389,10 @@ class CarEntry(BaseModel):
 class PlateCorrectionRequest(BaseModel):
     plate: str
 
+
+class ReviewStatusRequest(BaseModel):
+    status: str
+
 # ─────────────────────────── Endpoints ─────────────────────────────────────
 
 @app.get("/api/cars")
@@ -410,6 +414,17 @@ async def api_correct_plate(session_id: int, req: PlateCorrectionRequest,
         raise HTTPException(404, str(exc))
     except (ValueError, FileExistsError) as exc:
         raise HTTPException(409, str(exc))
+
+
+@app.patch("/api/history/{session_id}/review")
+async def api_review_session(session_id: int, req: ReviewStatusRequest,
+                             user: dict = Depends(require_admin)):
+    try:
+        return review_session(session_id, req.status, int(user["sub"]), user["username"])
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.post("/api/clear-history")
