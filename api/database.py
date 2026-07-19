@@ -472,6 +472,7 @@ def get_sightings(limit: int = 50, plate: str = None, near: str = None,
             "timestamp":  r["logged_at"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
             "confidence": float(r["confidence"]),
             "image_url":  f"{backend_url}/api/monitor/file/{r['image_path']}" if r["image_path"] else None,
+            "image_path": r["image_path"],
         }
         for r in rows
     ]

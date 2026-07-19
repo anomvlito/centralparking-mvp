@@ -17,6 +17,10 @@ type HistoryEntry = {
   session_id: number; timestamp: string; plate: string; action: string;
   status: string; review_status: string; fee: number; confidence: number; image_url: string | null;
 };
+type Sighting = {
+  plate: string; timestamp: string; confidence: number;
+  image_url: string | null; image_path: string | null;
+};
 type Stats = {
   today_income: number; today_entries: number;
   today_exits: number; parked_now: number;
@@ -546,6 +550,160 @@ function Historial() {
   );
 }
 
+// ─── Avistamientos ────────────────────────────────────────────────────────────
+// Desde 2026-07-17 la detección de cámara ya no abre/cierra sesiones sola
+// (DirectionTracker generaba salidas falsas y duplicados). Cada lectura de
+// patente queda como un "avistamiento" en detection_log, y acá se revisa
+// manualmente para confirmarla como entrada o salida real.
+
+function SightingRow({ s, isParked, onRegistered }: {
+  s: Sighting; isParked: boolean; onRegistered: () => void;
+}) {
+  const [plate, setPlate] = useState(s.plate);
+  const [busy, setBusy]   = useState(false);
+  const [msg, setMsg]     = useState("");
+
+  useEffect(() => { setPlate(s.plate); setMsg(""); }, [s.plate, s.timestamp]);
+
+  const registerEntry = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const r = await apiFetch(`${API}/api/entry`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plate, isEvent: false, imagePath: s.image_path }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "No se pudo registrar");
+      setMsg("Entrada registrada");
+      onRegistered();
+    } catch (error) {
+      setMsg(error instanceof Error ? error.message : "Error al registrar");
+    } finally { setBusy(false); }
+  };
+
+  const registerExit = async () => {
+    const feeInput = window.prompt(`Monto cobrado a ${plate} (dejar en 0 si no aplica):`, "0");
+    if (feeInput === null) return;
+    const fee = Number(feeInput.replace(/[^0-9.]/g, "")) || 0;
+    setBusy(true); setMsg("");
+    try {
+      const p = new URLSearchParams({ fee: String(fee) });
+      if (s.image_path) p.set("image_path", s.image_path);
+      const r = await apiFetch(`${API}/api/exit/${plate}?${p}`, { method: "POST" });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "No se pudo registrar");
+      setMsg("Salida registrada");
+      onRegistered();
+    } catch (error) {
+      setMsg(error instanceof Error ? error.message : "Error al registrar");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4 hover:bg-slate-50/50 transition-colors">
+      <PhotoThumb url={s.image_url} plate={plate} size="lg" />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <input value={plate} maxLength={8}
+            onChange={e => { setPlate(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "")); setMsg(""); }}
+            aria-label="Patente detectada (editable)"
+            className="font-black text-slate-900 tracking-widest text-base lg:text-xl font-mono bg-transparent outline-none border-b border-dashed border-slate-200 focus:border-indigo-400 w-28 lg:w-36" />
+          {isParked && (
+            <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
+              En el estacionamiento
+            </span>
+          )}
+        </div>
+        <p className="text-sm lg:text-base text-slate-400 font-mono mt-0.5">{s.timestamp.split(" ")[1]}</p>
+      </div>
+      <span className="text-xs text-slate-300 tabular-nums shrink-0 hidden md:block w-10 text-right">
+        {(s.confidence * 100).toFixed(0)}%
+      </span>
+      <div className="w-full lg:w-auto lg:ml-auto flex items-center justify-end gap-2 border-t border-slate-100 lg:border-0 pt-2 lg:pt-0">
+        {msg ? (
+          <span className={`text-xs font-bold ${msg.startsWith("No se") || msg.startsWith("Error") ? "text-rose-500" : "text-emerald-500"}`}>
+            {msg}
+          </span>
+        ) : isParked ? (
+          <button onClick={registerExit} disabled={busy || plate.length < 4}
+            className="h-9 px-3 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200 text-xs font-black disabled:opacity-50">
+            {busy ? "..." : "Registrar salida"}
+          </button>
+        ) : (
+          <button onClick={registerEntry} disabled={busy || plate.length < 4}
+            className="h-9 px-3 rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 text-xs font-black disabled:opacity-50">
+            {busy ? "..." : "Registrar entrada"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Avistamientos() {
+  const [date, setDate]       = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [sightings, setSightings] = useState<Sighting[]>([]);
+  const [parked, setParked]   = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const showParkedStatus = isToday(parseISO(date));
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [sRes, cRes] = await Promise.all([
+        apiFetch(`${API}/api/sightings?date=${date}&limit=300`),
+        apiFetch(`${API}/api/cars`),
+      ]);
+      if (sRes.ok) setSightings((await sRes.json()).sightings);
+      if (cRes.ok) setParked(new Set(Object.keys(await cRes.json())));
+    } finally { setLoading(false); }
+  }, [date]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div className="flex items-center bg-white border border-slate-200 rounded-xl overflow-hidden shrink-0">
+          <button onClick={() => setDate(format(subDays(parseISO(date), 1), "yyyy-MM-dd"))}
+            className="p-2.5 hover:bg-slate-50 text-slate-400 hover:text-slate-700 transition-colors">
+            <ChevronLeft size={16} />
+          </button>
+          <div className="flex items-center gap-1.5 px-1">
+            <Calendar size={14} className="text-slate-400" />
+            <input type="date" value={date} onChange={e => setDate(e.target.value)}
+              className="text-sm font-semibold text-slate-700 outline-none bg-transparent w-32 lg:w-36" />
+          </div>
+          <button onClick={() => setDate(format(addDays(parseISO(date), 1), "yyyy-MM-dd"))}
+            disabled={isToday(parseISO(date))}
+            className="p-2.5 hover:bg-slate-50 text-slate-400 hover:text-slate-700 disabled:opacity-30 transition-colors">
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <button onClick={load} className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50">
+          <RefreshCw size={15} className={`text-slate-500 ${loading ? "animate-spin" : ""}`} />
+        </button>
+        <p className="text-xs text-slate-400">
+          Última lectura de cámara por patente ese día — confirmá entrada o salida real.
+        </p>
+        {sightings.length > 0 && (
+          <span className="ml-auto text-xs text-slate-400">{sightings.length} avistamientos</span>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="divide-y divide-slate-50">
+          {sightings.map((s) => (
+            <SightingRow key={`${s.plate}_${s.timestamp}`} s={s}
+              isParked={showParkedStatus && parked.has(s.plate)} onRegistered={load} />
+          ))}
+          {sightings.length === 0 && !loading && (
+            <p className="text-center text-slate-400 py-16">Sin avistamientos para {date}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Reconciliación ───────────────────────────────────────────────────────────
 
 function Reconciliacion() {
@@ -712,7 +870,7 @@ function Reconciliacion() {
 
 export default function App() {
   const [auth, setAuthState]  = useState<AuthState>(null);
-  const [tab, setTab]         = useState<"dashboard" | "historial" | "reconciliacion">("dashboard");
+  const [tab, setTab]         = useState<"dashboard" | "historial" | "avistamientos" | "reconciliacion">("dashboard");
   const [stats, setStats]     = useState<Stats>({ today_income: 0, today_entries: 0, today_exits: 0, parked_now: 0 });
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -772,6 +930,7 @@ export default function App() {
             {([
               ["dashboard",      "Dashboard"],
               ["historial",      "Historial"],
+              ["avistamientos",  "Avistamientos"],
               ["reconciliacion", "Excel"],
             ] as const).map(([t, label]) => (
               <button key={t} onClick={() => setTab(t)}
@@ -790,6 +949,7 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-5 lg:py-8">
         {tab === "dashboard"      && <Dashboard stats={stats} history={history} loading={loading} onPlateSaved={refresh} />}
         {tab === "historial"      && <Historial />}
+        {tab === "avistamientos"  && <Avistamientos />}
         {tab === "reconciliacion" && <Reconciliacion />}
       </main>
     </div>

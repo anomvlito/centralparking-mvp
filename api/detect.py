@@ -488,6 +488,7 @@ class CarEntry(BaseModel):
     plate: str
     isEvent: bool = False
     eventFee: Optional[float] = None
+    imagePath: Optional[str] = None
 
 
 class PlateCorrectionRequest(BaseModel):
@@ -579,16 +580,16 @@ async def detect(image: UploadFile = File(...)):
 @app.post("/api/entry")
 async def entry(e: CarEntry):
     entry_time = now_cl().timestamp() * 1000
-    upsert_vehicle(e.plate, entry_time, e.isEvent, e.eventFee)
+    upsert_vehicle(e.plate, entry_time, e.isEvent, e.eventFee, image_path=e.imagePath)
     log_to_csv(e.plate, "ENTRY")
     return {"plate": e.plate, "entryTime": entry_time, "isEvent": e.isEvent, "eventFee": e.eventFee}
 
 
 @app.post("/api/exit/{plate}")
-async def exit_car(plate: str, fee: float = 0):
+async def exit_car(plate: str, fee: float = 0, image_path: Optional[str] = None):
     if not vehicle_exists(plate):
         raise HTTPException(status_code=404, detail="Plate not in parking")
-    remove_vehicle(plate, fee=fee)
+    remove_vehicle(plate, fee=fee, image_path=image_path)
     log_to_csv(plate, "EXIT", fee=fee)
     return {"status": "ok"}
 
