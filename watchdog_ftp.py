@@ -101,6 +101,15 @@ def _archive(src: str, plate: str | None, suffix: str = "") -> str | None:
         return None
 
 
+def _discard(path: str):
+    """Elimina el archivo temporal ya subido: el backend es quien decide si
+    guarda una imagen (y dónde), así que acá no queda nada más por archivar."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 # ─────────────────────────── Handler ────────────────────────────────────────
 
 class ReoLinkFTPHandler(FileSystemEventHandler):
@@ -134,26 +143,21 @@ class ReoLinkFTPHandler(FileSystemEventHandler):
             plate  = data.get("plate")
             action = data.get("action")
 
-            if action == "EXIT":
-                log.info(f"EXIT  {plate} conf={data.get('confidence', 0):.2f}")
-                _archive(path, plate=plate)
+            if action == "AUTO_CORRECTED_OCR":
+                old_plate = data.get("old_plate")
+                log.info(f"CORR  {old_plate} -> {plate} conf={data.get('confidence', 0):.2f}")
+                _archive(path, plate=plate, suffix="_corr")
 
             elif action == "STAGED":
+                # El backend ya decide y guarda (o descarta) la imagen dentro de
+                # staging_submit(): solo persiste la de mejor calidad vigente en
+                # la ventana y borra la anterior al ser superada. Archivar acá
+                # también creaba un segundo archivo por cada frame que nunca se
+                # limpiaba, dejando "fotos duplicadas" de la misma patente en
+                # /ftp/historico.
                 staging = data.get("staging", {})
-                is_dup  = staging.get("action") == "inferior_quality"
-                suffix  = "_dup" if is_dup else ""
                 log.info(f"STG   {plate} {staging.get('action')} score={staging.get('combined_score', 0):.3f}")
-                image_path = _archive(path, plate=plate, suffix=suffix)
-                # Vincular imagen al registro de staging si es la mejor calidad
-                if image_path and not is_dup:
-                    try:
-                        requests.post(
-                            f"{API_BASE}/api/staging/set-image",
-                            json={"plate": plate, "image_path": image_path},
-                            timeout=5,
-                        )
-                    except Exception:
-                        pass
+                _discard(path)
 
             else:
                 error = data.get("error", "desconocido")

@@ -182,6 +182,46 @@ def strategy_center_crop(img: np.ndarray) -> np.ndarray:
     return cv2.resize(cropped, (w, h))
 
 
+def strategy_highlight_recovery(img: np.ndarray) -> np.ndarray:
+    """
+    Recuperación de altas luces (highlight recovery).
+
+    PROBLEMA: luces delanteras/traseras del auto sobreexponen parte de la
+    patente — típicamente el último carácter, más cercano al foco de luz.
+    Un píxel ya saturado a blanco puro (255) no tiene detalle que recuperar,
+    pero la franja "casi blanca" (L≈180-254 en espacio LAB) suele conservar
+    algo de gradiente real entre el carácter y el fondo, solo que comprimido
+    en un rango tan angosto que se ve plano. Bajar la exposición global (o
+    CLAHE de tile fijo) no ayuda: aplasta el resto de la placa que ya estaba
+    bien expuesta sin aportar contraste donde realmente falta.
+
+    SOLUCIÓN: estira lo que haya de variación real dentro de esa franja alta
+    (min-max stretch acotado a L>180) para ocupar todo el rango 180-255, y
+    luego aplica CLAHE de tile chico para resaltar los bordes de los
+    caracteres ya separados. Si la franja está perfectamente saturada
+    (sin variación real, min==max), no hay nada que estirar y la imagen
+    queda igual — evita inventar contraste donde no hay información.
+    """
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    highlights = l[l > 180]
+    if highlights.size > 20:
+        lo = float(highlights.min())
+        hi = float(highlights.max())
+        if hi - lo > 1:
+            lut = np.arange(256, dtype=np.float32)
+            mask = lut > 180
+            lut[mask] = 180 + (lut[mask] - lo) / (hi - lo) * (255 - 180)
+            lut = np.clip(lut, 0, 255).astype(np.uint8)
+            l = cv2.LUT(l, lut)
+
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(4, 4))
+    l = clahe.apply(l)
+
+    return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+
+
 def strategy_bilateral_denoise(img: np.ndarray) -> np.ndarray:
     """Filtro bilateral: reduce ruido JPEG preservando bordes de caracteres."""
     return cv2.bilateralFilter(img, d=9, sigmaColor=75, sigmaSpace=75)
@@ -239,6 +279,8 @@ STRATEGIES = [
     ("raw",                   lambda img: img),
     # Realce de contraste — para fotos a pantalla o escenas oscuras
     ("clahe",                 strategy_clahe),
+    # Recuperación de altas luces — para luces del auto que queman parte de la placa
+    ("highlight_recovery",    strategy_highlight_recovery),
     # Sharpening — para fotos movidas o con blur por ángulo
     ("sharpen",               strategy_sharpen),
     # Corrección de perspectiva — para fotos diagonales
@@ -289,7 +331,8 @@ def is_valid_plate(text: str) -> bool:
     return any(p.match(text) for p in _PLATE_PATTERNS)
 
 
-def extract_best_plate(results, strategy_name: str) -> Optional[dict]:
+def extract_best_plate(results, strategy_name: str,
+                       image_shape=None) -> Optional[dict]:
     """
     Extrae el texto de patente con mayor confianza promedio de los resultados ALPR.
     Filtra lecturas que no calzan con formatos de patente chilenos o de países vecinos.
@@ -320,16 +363,50 @@ def extract_best_plate(results, strategy_name: str) -> Optional[dict]:
         if conf > best_conf:
             best_conf = conf
             best_text = text
-            best_bbox_w = r.detection.bounding_box.width if r.detection else 0
+            if r.detection:
+                bbox = r.detection.bounding_box
+                if image_shape is not None:
+                    height, width = image_shape[:2]
+                    best_center_x = ((bbox.x1 + bbox.x2) / 2) / width
+                    best_center_y = ((bbox.y1 + bbox.y2) / 2) / height
+                    # Tamaño normalizado de la patente (promedio ancho/alto):
+                    # crece cuando el auto se acerca a la cámara, sin importar
+                    # el ángulo de la toma — complementa a center_x/center_y,
+                    # que solo aporta señal cuando el auto cruza el cuadro.
+                    norm_width = (bbox.x2 - bbox.x1) / width
+                    norm_height = (bbox.y2 - bbox.y1) / height
+                    best_size = (norm_width + norm_height) / 2
+                else:
+                    best_center_x = best_center_y = best_size = None
+            else:
+                best_center_x = best_center_y = best_size = None
 
     if best_text:
         return {
             "plate":      best_text,
             "confidence": best_conf,
             "strategy":   strategy_name,
-            "bbox_width": best_bbox_w,  # ancho del bounding box de la patente en px
+            "center_x":   best_center_x,
+            "center_y":   best_center_y,
+            "size":       best_size,
         }
     return None
+
+
+# Una lectura corroborada por una sola estrategia (de 12) es la más fácil de
+# confundir con ruido/objetos fijos del fondo (ver caso real: bloque de
+# hormigón/plástico leído como patente con confianza 0.62-0.69 por una sola
+# estrategia). Lecturas de 2+ estrategias no pasan por este filtro: ya están
+# corroboradas independientemente y bajarles el piso de confianza rechazaría
+# patentes reales verificadas (ver LLPD45, VYFJ45 en el archivo histórico).
+#
+# El piso se bajó de 0.75 a 0.70 (2026-07-17): deja solo 0.01 de margen sobre
+# el techo documentado del falso positivo (0.69), así que recupera lecturas
+# reales de una sola estrategia entre 0.70-0.75 que hoy se descartaban, sin
+# reabrir ese caso puntual. Si en producción reaparecen falsos positivos de
+# fondo en ese rango, subir MIN_SINGLE_VOTE_CONFIDENCE por env var (sin tocar
+# código) es la primera palanca a probar antes de tocar esta lógica.
+MIN_SINGLE_VOTE_CONFIDENCE = float(os.environ.get("MIN_SINGLE_VOTE_CONFIDENCE", "0.70"))
 
 
 def run_multi_strategy(img: np.ndarray) -> Optional[dict]:
@@ -344,7 +421,7 @@ def run_multi_strategy(img: np.ndarray) -> Optional[dict]:
         try:
             processed = fn(img)
             results = alpr.predict(processed)
-            candidate = extract_best_plate(results, name)
+            candidate = extract_best_plate(results, name, processed.shape)
             if candidate:
                 candidates.append(candidate)
             else:
@@ -367,6 +444,33 @@ def run_multi_strategy(img: np.ndarray) -> Optional[dict]:
     winner_plate = max(votes, key=score)
     winner_group = votes[winner_plate]
     best = max(winner_group, key=lambda c: c["confidence"])
+
+    if len(winner_group) == 1 and best["confidence"] < MIN_SINGLE_VOTE_CONFIDENCE:
+        print(
+            f"no_detection: {winner_plate} descartado "
+            f"(1 sola estrategia, conf={best['confidence']:.2f} "
+            f"< {MIN_SINGLE_VOTE_CONFIDENCE})"
+        )
+        return None
+
+    # Para dirección se prefieren estrategias que conservan la geometría original.
+    geometry_preserving = {
+        "raw", "clahe", "highlight_recovery", "sharpen", "bilateral+clahe", "grayscale_eq"
+    }
+    position_candidates = [
+        candidate for candidate in winner_group
+        if candidate["strategy"] in geometry_preserving
+        and candidate.get("center_x") is not None
+    ]
+    if position_candidates:
+        position_source = max(position_candidates, key=lambda c: c["confidence"])
+        best = {
+            **best,
+            "center_x": position_source["center_x"],
+            "center_y": position_source["center_y"],
+            "size": position_source["size"],
+            "position_strategy": position_source["strategy"],
+        }
     avg_conf = statistics.mean(c["confidence"] for c in winner_group)
 
     print(

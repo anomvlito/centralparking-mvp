@@ -12,6 +12,7 @@ import re
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 _CL = ZoneInfo("America/Santiago")
@@ -77,6 +78,17 @@ def init_db():
                     expires_at          TIMESTAMPTZ  NOT NULL,
                     image_path          VARCHAR(255)
                 )
+            """)
+            # Migración: EXIT también compite por calidad en staging (antes era
+            # inmediato y usaba el primer frame que confirmara alejamiento, casi
+            # siempre el más lejano/peor de la ráfaga).
+            cur.execute("""
+                ALTER TABLE staging_detections
+                ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'ENTRY'
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_staging_detections_plate_kind_status
+                ON staging_detections(plate, kind, status)
             """)
             # Migración: agregar columnas de fotos a parking_sessions
             cur.execute("""
@@ -145,10 +157,15 @@ def load_db() -> dict:
 
 
 def upsert_vehicle(plate: str, entry_time_ms: float,
-                   is_event: bool = False, event_fee=None, image_path: str = None):
+                   is_event: bool = False, event_fee=None, image_path: str = None,
+                   source: str = "camera_auto"):
+    plate = re.sub(r"[^A-Z0-9]", "", plate.upper())
     entry_dt = datetime.datetime.fromtimestamp(entry_time_ms / 1000, tz=_CL)
     with _db() as conn:
         with conn.cursor() as cur:
+            # Serializa altas concurrentes de la misma patente. Sin este lock,
+            # dos workers pueden hacer el SELECT antes de que cualquiera inserte.
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (plate,))
             cur.execute(
                 "INSERT INTO vehicles (plate) VALUES (%s) ON CONFLICT (plate) DO NOTHING",
                 (plate,)
@@ -160,17 +177,16 @@ def upsert_vehicle(plate: str, entry_time_ms: float,
             """, (plate,))
             existing = cur.fetchone()
             if existing:
-                cur.execute("""
-                    UPDATE parking_sessions
-                    SET entry_time = %s, is_event = %s, event_fee = %s, entry_image_path = %s, updated_at = now()
-                    WHERE id = %s
-                """, (entry_dt, is_event, event_fee, image_path, existing["id"]))
+                # La detección repetida no debe reiniciar la hora ni reemplazar
+                # los datos de la sesión que ya está abierta.
+                return False
             else:
                 cur.execute("""
                     INSERT INTO parking_sessions
                         (plate, entry_time, is_event, event_fee, entry_image_path, source, status)
-                    VALUES (%s, %s, %s, %s, %s, 'camera_auto', 'REAL')
-                """, (plate, entry_dt, is_event, event_fee, image_path))
+                    VALUES (%s, %s, %s, %s, %s, %s, 'REAL')
+                """, (plate, entry_dt, is_event, event_fee, image_path, source))
+                return True
 
 
 def remove_vehicle(plate: str, fee: float = 0, image_path: str = None):
@@ -203,6 +219,68 @@ def vehicle_exists(plate: str) -> bool:
                 WHERE plate = %s AND exit_time IS NULL AND status != 'VOID'
             """, (plate,))
             return cur.fetchone() is not None
+
+
+# ─────────────────────── dedup por lectura de OCR similar ───────────────────
+
+# Ventana y distancia alineadas con el criterio ya usado en correct_session_plate
+# (± 5 minutos) para reasignar detection_log/staging_detections tras una corrección.
+PLATE_FUZZY_WINDOW_MIN = int(os.environ.get("PLATE_FUZZY_WINDOW_MIN", "5"))
+PLATE_FUZZY_MAX_DISTANCE = int(os.environ.get("PLATE_FUZZY_MAX_DISTANCE", "2"))
+
+
+def _levenshtein(a: str, b: str) -> int:
+    """Distancia de edición simple (sin librerías externas)."""
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+        prev = curr
+    return prev[-1]
+
+
+def find_similar_active_session(plate: str) -> Optional[dict]:
+    """
+    Busca una sesión activa reciente cuya patente sea muy parecida a `plate`
+    (posible error de OCR sobre el mismo auto: dígito perdido por luces,
+    carácter confundido, etc.), en vez de un vehículo nuevo.
+
+    Se limita a una ventana corta (PLATE_FUZZY_WINDOW_MIN) y a sesiones de
+    origen cámara, para minimizar el riesgo de fusionar dos autos reales con
+    patentes parecidas que entren casi al mismo tiempo.
+    """
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, plate FROM parking_sessions
+                WHERE exit_time IS NULL AND status != 'VOID'
+                  AND source = 'camera_auto'
+                  AND entry_time > now() - make_interval(mins => %s)
+            """, (PLATE_FUZZY_WINDOW_MIN,))
+            rows = cur.fetchall()
+
+    best = None
+    for r in rows:
+        if r["plate"] == plate:
+            continue
+        dist = _levenshtein(plate, r["plate"])
+        if dist <= PLATE_FUZZY_MAX_DISTANCE and (best is None or dist < best["distance"]):
+            best = {"id": r["id"], "plate": r["plate"], "distance": dist}
+    return best
+
+
+def log_audit_event(plate: Optional[str], event_type: str, details: dict):
+    """Registra un evento en audit_log (uso general, fuera de staging.py)."""
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO audit_log (plate, event_type, details)
+                VALUES (%s, %s, %s::jsonb)
+            """, (plate, event_type, json.dumps(details)))
 
 
 # ─────────────────────── log / historial ────────────────────────────────────
@@ -296,6 +374,107 @@ def get_history(limit: int = 200, date: str = None) -> list:
         }
         result.append(entry)
     return result
+
+
+def get_sightings(limit: int = 50, plate: str = None, near: str = None,
+                  window_minutes: int = 30, date: str = None) -> list:
+    """
+    Avistamientos de cámara con foto (detection_log) — no confundir con
+    get_history(), que lee parking_sessions (entradas/salidas manuales).
+
+    Incluye acción 'DETECTED' (avistamiento plano, flujo actual) y también
+    'ENTRY'/'EXIT' (flujo anterior, que sí abría/cerraba parking_sessions
+    directamente): son la misma clase de evento — una foto de la patente en
+    un momento dado — solo que logueadas bajo un nombre distinto según qué
+    versión del pipeline estaba corriendo. Filtrar solo por 'DETECTED'
+    dejaba afuera toda foto tomada antes del cambio de arquitectura.
+
+    Sin `plate` ni `date`: feed con el avistamiento más reciente por cada
+    patente (para listar "qué autos se vieron últimamente").
+    Sin `plate` y con `date` ("YYYY-MM-DD"): igual, pero acotado a esa fecha
+    (para reconstruir el Historial de un día puntual).
+    Con `plate` y `near` ("YYYY-MM-DD HH:MM:SS", hora de Chile): solo fotos
+    dentro de `window_minutes` de esa hora, ordenadas por cercanía — para
+    una fila de sesión real, evita mostrar la foto de un avistamiento no
+    relacionado de esa misma patente en otro momento.
+    Con `plate` y `date` ("YYYY-MM-DD", hora de Chile): todas las fotos de
+    esa patente tomadas ese día — para una fila de avistamiento sin sesión,
+    que representa a la patente en ese día, no un instante puntual.
+    Con solo `plate`: todas las fotos recientes de esa patente, sin acotar.
+    """
+    with _db() as conn:
+        with conn.cursor() as cur:
+            if plate and near:
+                normalized = re.sub(r"[^A-Z0-9]", "", plate.upper())
+                near_dt = datetime.datetime.strptime(near, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_CL)
+                cur.execute("""
+                    SELECT plate, logged_at, confidence, image_path
+                    FROM detection_log
+                    WHERE action IN ('DETECTED', 'ENTRY', 'EXIT')
+                      AND image_path IS NOT NULL AND plate = %s
+                      AND logged_at BETWEEN %s - make_interval(mins => %s)
+                                         AND %s + make_interval(mins => %s)
+                    ORDER BY ABS(EXTRACT(EPOCH FROM (logged_at - %s)))
+                    LIMIT %s
+                """, (normalized, near_dt, window_minutes, near_dt, window_minutes, near_dt, limit))
+            elif plate and date:
+                normalized = re.sub(r"[^A-Z0-9]", "", plate.upper())
+                cur.execute("""
+                    SELECT plate, logged_at, confidence, image_path
+                    FROM detection_log
+                    WHERE action IN ('DETECTED', 'ENTRY', 'EXIT')
+                      AND image_path IS NOT NULL AND plate = %s
+                      AND (logged_at AT TIME ZONE 'America/Santiago')::date = %s::date
+                    ORDER BY logged_at DESC
+                    LIMIT %s
+                """, (normalized, date, limit))
+            elif plate:
+                normalized = re.sub(r"[^A-Z0-9]", "", plate.upper())
+                cur.execute("""
+                    SELECT plate, logged_at, confidence, image_path
+                    FROM detection_log
+                    WHERE action IN ('DETECTED', 'ENTRY', 'EXIT')
+                      AND image_path IS NOT NULL AND plate = %s
+                    ORDER BY logged_at DESC
+                    LIMIT %s
+                """, (normalized, limit))
+            elif date:
+                cur.execute("""
+                    SELECT plate, logged_at, confidence, image_path FROM (
+                        SELECT DISTINCT ON (plate) plate, logged_at, confidence, image_path
+                        FROM detection_log
+                        WHERE action IN ('DETECTED', 'ENTRY', 'EXIT')
+                          AND image_path IS NOT NULL
+                          AND (logged_at AT TIME ZONE 'America/Santiago')::date = %s::date
+                        ORDER BY plate, logged_at DESC
+                    ) latest
+                    ORDER BY logged_at DESC
+                    LIMIT %s
+                """, (date, limit))
+            else:
+                cur.execute("""
+                    SELECT plate, logged_at, confidence, image_path FROM (
+                        SELECT DISTINCT ON (plate) plate, logged_at, confidence, image_path
+                        FROM detection_log
+                        WHERE action IN ('DETECTED', 'ENTRY', 'EXIT')
+                          AND image_path IS NOT NULL
+                        ORDER BY plate, logged_at DESC
+                    ) latest
+                    ORDER BY logged_at DESC
+                    LIMIT %s
+                """, (limit,))
+            rows = cur.fetchall()
+
+    backend_url = os.environ.get("BACKEND_URL", "https://2.24.69.49.nip.io").rstrip("/")
+    return [
+        {
+            "plate":      r["plate"],
+            "timestamp":  r["logged_at"].astimezone(_CL).strftime("%Y-%m-%d %H:%M:%S"),
+            "confidence": float(r["confidence"]),
+            "image_url":  f"{backend_url}/api/monitor/file/{r['image_path']}" if r["image_path"] else None,
+        }
+        for r in rows
+    ]
 
 
 def review_session(session_id: int, review_status: str, user_id: int, username: str) -> dict:

@@ -4,27 +4,69 @@ Buffer de staging con deduplicación y quality scoring.
 
 Flujo:
   FTP image → calculate_quality() → staging_submit() → [2 min TTL]
-           → background loop promueve 'pending' expirados → ENTRY en parking
+           → background loop promueve 'pending' expirados → avistamiento
+             logueado (detection_log, acción 'DETECTED')
 
-El EXIT sigue siendo inmediato (bypass staging).
-Frontend no requiere cambios: /api/history y /api/cars solo ven datos aprobados.
+2026-07-17: se desconectó la distinción automática entrada/salida
+(DirectionTracker no era confiable — generaba tanto salidas falsas como
+duplicados). Por ahora toda detección de patente pasa por el mismo buffer,
+compite por la mejor foto dentro de una ventana corta, y se loguea como un
+avistamiento plano — sin abrir ni cerrar parking_sessions. Esa apertura/
+cierre sigue siendo manual (/api/entry, /api/exit). Ver
+ftp_handler._handle_auto_detection para el detalle.
+Frontend no requiere cambios: /api/history y /api/cars solo ven datos de
+parking_sessions (entradas/salidas manuales), no de detection_log.
 """
 
 import asyncio
 import json
+import os
 import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import cv2
 import numpy as np
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from api.database import _db, now_cl, upsert_vehicle, vehicle_exists, log_to_db
+from api.database import _db, now_cl, log_to_db, get_sightings
+
+_CL = ZoneInfo("America/Santiago")
 
 router = APIRouter()
 
 STAGING_TTL_SECONDS = 120
+FTP_ARCHIVE_DIR = os.environ.get("FTP_ARCHIVE_DIR", "/ftp/historico")
+
+
+# ─────────────────────── Persistencia de imagen ─────────────────────────────
+
+def _save_detection_image(img: np.ndarray, plate: str) -> str:
+    """Guarda la imagen en /ftp/historico solo para la detección que se conserva."""
+    now_dt = now_cl()
+    date_str = now_dt.strftime("%Y-%m-%d")
+    time_str = now_dt.strftime("%H-%M-%S")
+    folder = os.path.join(FTP_ARCHIVE_DIR, date_str)
+    os.makedirs(folder, exist_ok=True)
+    filename = f"{time_str}_{plate}_{date_str}.jpg"
+    cv2.imwrite(os.path.join(folder, filename), img)
+    return f"historico/{date_str}/{filename}"
+
+
+def _delete_ftp_image(rel_path: str):
+    """
+    Borra una imagen previamente guardada al ser superada por una de mejor calidad.
+    image_path siempre se guarda relativo a /ftp (mismo criterio que
+    database.correct_session_plate y ftp_handler.serve_ftp_file).
+    """
+    full_path = os.path.realpath(os.path.join("/ftp", rel_path))
+    if not full_path.startswith("/ftp" + os.sep):
+        return
+    try:
+        os.remove(full_path)
+    except OSError:
+        pass
 
 
 # ─────────────────────── Quality scoring ────────────────────────────────────
@@ -74,19 +116,23 @@ def calculate_quality_score(img: np.ndarray, plate: str, confidence: float) -> d
 # ─────────────────────── Core deduplication ─────────────────────────────────
 
 def staging_submit(plate: str, confidence: float, quality: dict,
-                   strategy: Optional[str] = None, image_path: Optional[str] = None) -> dict:
+                   strategy: Optional[str] = None, img: Optional[np.ndarray] = None) -> dict:
     """
     Ingresa una detección al buffer.
-    Retorna: {status: 'pending'|'rejected', action_taken, combined_score}
+    Solo se escribe una imagen a disco por patente/ventana: la de mejor
+    combined_score vigente. Las detecciones inferiores nunca tocan el disco,
+    y si una nueva mejor reemplaza a la guardada, la anterior se borra.
+    Retorna: {status: 'pending'|'rejected', action_taken, combined_score, image_path}
     """
     combined = quality["combined_score"]
     expires_at = now_cl() + datetime.timedelta(seconds=STAGING_TTL_SECONDS)
+    old_image_to_delete = None
 
     with _db() as conn:
         with conn.cursor() as cur:
             # Buscar 'pending' activo para esta patente en la ventana
             cur.execute("""
-                SELECT id, combined_score FROM staging_detections
+                SELECT id, combined_score, image_path FROM staging_detections
                 WHERE plate = %s AND status = 'pending' AND expires_at > now()
                 ORDER BY combined_score DESC
                 LIMIT 1
@@ -96,10 +142,13 @@ def staging_submit(plate: str, confidence: float, quality: dict,
             if existing:
                 if combined > float(existing["combined_score"]):
                     # Nuevo es mejor: rechazar el existente, insertar nuevo
+                    image_path = _save_detection_image(img, plate) if img is not None else None
+                    old_image_to_delete = existing["image_path"]
                     cur.execute("""
                         UPDATE staging_detections
                         SET status = 'rejected',
-                            rejection_reason = 'superseded_by_better_quality'
+                            rejection_reason = 'superseded_by_better_quality',
+                            image_path = NULL
                         WHERE id = %s
                     """, (existing["id"],))
                     cur.execute("""
@@ -115,25 +164,27 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                     _audit(plate, "SUPERSEDED",
                            {"old_score": float(existing["combined_score"]),
                             "new_score": combined})
-                    return {"status": "pending", "action": "replaced_inferior",
-                            "combined_score": combined}
+                    result = {"status": "pending", "action": "replaced_inferior",
+                              "combined_score": combined, "image_path": image_path}
                 else:
-                    # Nuevo es peor: rechazarlo
+                    # Nuevo es peor: rechazarlo, nunca se guarda en disco
                     cur.execute("""
                         INSERT INTO staging_detections
                             (plate, confidence, quality_score, combined_score,
                              sharpness, contrast_score, brightness_score, ocr_clarity,
                              strategy, status, rejection_reason, expires_at, image_path)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'rejected','inferior_quality',%s,%s)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'rejected','inferior_quality',%s,NULL)
                     """, (plate, confidence, quality["quality_score"], combined,
                           quality["sharpness"], quality["contrast_score"],
                           quality["brightness_score"], quality["ocr_clarity"],
-                          strategy, expires_at, image_path))
-                    return {"status": "rejected", "action": "inferior_quality",
-                            "combined_score": combined,
-                            "best_score": float(existing["combined_score"])}
+                          strategy, expires_at))
+                    result = {"status": "rejected", "action": "inferior_quality",
+                              "combined_score": combined,
+                              "best_score": float(existing["combined_score"]),
+                              "image_path": None}
             else:
                 # Primera detección en la ventana: insertar como pending
+                image_path = _save_detection_image(img, plate) if img is not None else None
                 cur.execute("""
                     INSERT INTO staging_detections
                         (plate, confidence, quality_score, combined_score,
@@ -144,13 +195,20 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                       quality["sharpness"], quality["contrast_score"],
                       quality["brightness_score"], quality["ocr_clarity"],
                       strategy, expires_at, image_path))
-                return {"status": "pending", "action": "first_in_window",
-                        "combined_score": combined}
+                result = {"status": "pending", "action": "first_in_window",
+                          "combined_score": combined, "image_path": image_path}
+
+    if old_image_to_delete:
+        _delete_ftp_image(old_image_to_delete)
+    return result
 
 
 def staging_promote_expired():
     """
-    Promueve entradas 'pending' expiradas → ENTRY en parking.
+    Promueve entradas 'pending' expiradas a un avistamiento logueado
+    (detection_log, acción 'DETECTED') — no decide automáticamente si es
+    entrada o salida (ver nota al principio del archivo). No toca
+    parking_sessions: esa apertura/cierre sigue siendo manual.
     Se llama periódicamente desde el background loop.
     """
     promoted = 0
@@ -170,16 +228,10 @@ def staging_promote_expired():
                     (row["id"],)
                 )
 
-                if vehicle_exists(plate):
-                    _audit(plate, "PROMOTED_SKIP", {"reason": "already_in_parking"})
-                    continue
-
-                upsert_vehicle(plate, now_cl().timestamp() * 1000,
-                               image_path=row["image_path"])
-                log_to_db(plate, "ENTRY", status="STAGING_AUTO",
+                log_to_db(plate, "DETECTED", status="STAGING_AUTO",
                           conf=float(row["combined_score"]),
                           image_path=row["image_path"])
-                _audit(plate, "PROMOTED",
+                _audit(plate, "DETECTED",
                        {"combined_score": float(row["combined_score"]),
                         "strategy": row["strategy"]})
                 promoted += 1
@@ -226,7 +278,7 @@ async def staging_loop():
         try:
             promoted = staging_promote_expired()
             if promoted:
-                print(f"[staging] Promovidos {promoted} vehículo(s) a ENTRY")
+                print(f"[staging] {promoted} avistamiento(s) registrado(s)")
             staging_cleanup_old()
         except Exception as e:
             print(f"[staging] Error en loop: {e}")
@@ -289,24 +341,26 @@ async def api_staging_status(plate: str):
     }
 
 
-class SetImageRequest(BaseModel):
-    plate: str
-    image_path: str
+@router.get("/api/sightings")
+async def api_sightings(limit: int = 50, date: str = None):
+    """
+    Feed de avistamientos: el más reciente por cada patente. Con `date`
+    ("YYYY-MM-DD"), acotado a esa fecha (para el Historial por día).
+    """
+    return {"sightings": get_sightings(limit=min(limit, 500), date=date)}
 
 
-@router.post("/api/staging/set-image")
-async def api_staging_set_image(req: SetImageRequest):
-    """Vincula la imagen archivada al registro de staging más reciente de la patente."""
-    with _db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE staging_detections SET image_path = %s
-                WHERE plate = %s AND status = 'pending'
-                  AND expires_at > now()
-                ORDER BY detected_at DESC
-                LIMIT 1
-            """, (req.image_path, req.plate))
-    return {"status": "ok"}
+@router.get("/api/sightings/{plate}")
+async def api_sightings_by_plate(plate: str, limit: int = 20, near: str = None,
+                                  window_minutes: int = 30, date: str = None):
+    """
+    Fotos de avistamientos de una patente puntual. Con `near` ("YYYY-MM-DD
+    HH:MM:SS", hora de Chile), acota a fotos cercanas a ese momento. Con
+    `date` ("YYYY-MM-DD"), acota a fotos de ese día. Sin ninguno, trae las
+    más recientes sin acotar.
+    """
+    return {"sightings": get_sightings(limit=min(limit, 100), plate=plate,
+                                        near=near, window_minutes=window_minutes, date=date)}
 
 
 class FeedbackRequest(BaseModel):

@@ -157,6 +157,28 @@ Al resolver un nuevo bug, agregá aquí:
 
 ---
 
+## 🔧 [2026-06-13 21:00] Optimización: Estrategia Híbrida FOTOS + VIDEOS
+
+**Cambios aplicados:**
+1. **Video processing mejorado:**
+   - Frame skipping: 10 → 5 frames (cobertura de ~6fps en lugar de 3fps)
+   - Motion threshold: 2% → 1% (detecta movimientos más pequeños)
+   - Estrategia: CLAHE solo → RUN_MULTI_STRATEGY (usa 12 estrategias como fotos)
+   - Confirmación: 2 frames → 1 frame (menos restrictivo)
+
+2. **Deduplicación respetada:**
+   - Videos ahora registran en BD automáticamente
+   - Pero SOLO si no existe sesión activa (vehicle_exists check)
+   - Evita duplicados: Tier 1 (fotos) + Tier 2 (videos backup)
+   - Si foto detectó AABB11 → video no re-registra AABB11
+
+3. **Resultado esperado:**
+   - Fotos: 70-80% tasa de detección (multi-strategy completa)
+   - Videos: Backup para casos donde fotos fallan
+   - Sin duplicados por deduplicación
+
+---
+
 ## Estado General
 
 ✅ **Sistema 100% OPERACIONAL:**

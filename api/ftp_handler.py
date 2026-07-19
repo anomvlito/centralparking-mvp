@@ -15,18 +15,16 @@ import os
 import re
 import csv
 import json
-import time
 import numpy as np
 import cv2
-from collections import defaultdict
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from api.detect import alpr, HAS_ML, run_multi_strategy
 from api.database import (
-    now_cl, vehicle_exists, remove_vehicle,
-    log_to_db as log_to_csv,
+    now_cl,
+    find_similar_active_session, correct_session_plate, log_audit_event,
 )
 from api.staging import calculate_quality_score, staging_submit
 from api.video_processor import _process_video_task, VIDEO_RESULTS_DIR
@@ -38,109 +36,20 @@ FTP_ARCHIVE_DIR  = os.environ.get("FTP_ARCHIVE_DIR", "/ftp/historico")
 FTP_REVIEW_DIR   = os.environ.get("FTP_REVIEW_DIR",  "/ftp/revisar")
 
 
-# ─────────────────────────── Direction tracker ──────────────────────────────
-
-class DirectionTracker:
-    """
-    Estima la dirección de movimiento de un vehículo comparando el ancho del
-    bounding box de la patente en capturas consecutivas de la misma ráfaga FTP.
-
-    Lógica:
-      - bbox creciendo  →  vehículo acercándose  →  APPROACHING (entrada)
-      - bbox achicándose →  vehículo alejándose   →  DEPARTING  (salida)
-      - cambio < umbral  →  sin información       →  UNKNOWN
-
-    El tracker mantiene las últimas N lecturas por patente dentro de una ventana
-    de tiempo. Lecturas más antiguas que la ventana se descartan automáticamente.
-    """
-
-    # Ventana de tiempo para agrupar capturas de la misma ráfaga
-    WINDOW_SEC       = 15
-    # Cambio mínimo (%) para emitir señal; debajo → UNKNOWN
-    MIN_CHANGE_PCT   = 10
-    # Máximo de lecturas almacenadas por patente
-    MAX_HISTORY      = 8
-
-    def __init__(self):
-        # plate → [(timestamp_float, bbox_width_px)]
-        self._history: dict[str, list[tuple[float, int]]] = defaultdict(list)
-
-    def record(self, plate: str, bbox_width: int) -> str:
-        """
-        Registra una nueva lectura y retorna la dirección estimada.
-
-        Returns:
-          "APPROACHING" | "DEPARTING" | "UNKNOWN"
-        """
-        if not bbox_width or bbox_width <= 0:
-            return "UNKNOWN"
-
-        now = time.monotonic()
-        history = self._history[plate]
-
-        # Purgar lecturas fuera de la ventana
-        history[:] = [(t, w) for t, w in history if now - t <= self.WINDOW_SEC]
-
-        if history:
-            _, prev_width = history[-1]
-            change_pct = ((bbox_width - prev_width) / prev_width) * 100
-
-            if abs(change_pct) >= self.MIN_CHANGE_PCT:
-                direction = "APPROACHING" if change_pct > 0 else "DEPARTING"
-            else:
-                direction = "UNKNOWN"
-        else:
-            direction = "UNKNOWN"   # primera lectura, sin referencia
-
-        # Guardar y limitar historial
-        history.append((now, bbox_width))
-        if len(history) > self.MAX_HISTORY:
-            history.pop(0)
-
-        return direction
-
-    def clear(self, plate: str):
-        """Limpia el historial de una patente (llamar tras registrar EXIT)."""
-        self._history.pop(plate, None)
-
-    def get_trend(self, plate: str) -> str:
-        """
-        Evalúa el historial completo por regresión lineal simple.
-        Útil cuando hay 3+ lecturas: más robusto que comparar solo la última.
-        """
-        history = self._history.get(plate, [])
-        if len(history) < 3:
-            return "UNKNOWN"
-
-        widths = [w for _, w in history]
-        n = len(widths)
-        # Pendiente: m > 0 → creciendo (acercándose), m < 0 → alejándose
-        mean_i = (n - 1) / 2
-        mean_w = sum(widths) / n
-        num = sum((i - mean_i) * (widths[i] - mean_w) for i in range(n))
-        den = sum((i - mean_i) ** 2 for i in range(n))
-        if den == 0:
-            return "UNKNOWN"
-        slope = num / den
-
-        # Solo emitir señal si la pendiente es significativa
-        threshold = mean_w * (self.MIN_CHANGE_PCT / 100) / n
-        if slope >  threshold: return "APPROACHING"
-        if slope < -threshold: return "DEPARTING"
-        return "UNKNOWN"
-
-
-# Instancia global — el proceso uvicorn tiene un solo worker por servicio
-_direction = DirectionTracker()
-
-
 # ─────────────────────────── Helpers ────────────────────────────────────────
 
 def _load_ftp_events() -> list:
     if not os.path.exists(FTP_EVENTS_FILE):
         return []
     with open(FTP_EVENTS_FILE, "r") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            # Log auxiliar (no es la fuente de verdad, esa es Postgres). Si
+            # quedó truncado por un crash a mitad de escritura, no debe tirar
+            # abajo el registro real de la detección: se reinicia el log.
+            print(f"[ftp_events] {FTP_EVENTS_FILE} corrupto, reiniciando log")
+            return []
 
 
 def _append_ftp_event(plate: str, source: str, confidence: float, strategy: str, action: str = "ENTRY"):
@@ -153,79 +62,88 @@ def _append_ftp_event(plate: str, source: str, confidence: float, strategy: str,
         "strategy":   strategy,
         "action":     action,
     })
-    with open(FTP_EVENTS_FILE, "w") as f:
+    # Escritura atómica: evita que un crash a mitad de escritura vuelva a
+    # truncar/corromper el archivo (fue la causa de la corrupción anterior).
+    tmp_path = FTP_EVENTS_FILE + ".tmp"
+    with open(tmp_path, "w") as f:
         json.dump(events[-500:], f, indent=2)
+    os.replace(tmp_path, FTP_EVENTS_FILE)
+
+
+def _quality_for(img: np.ndarray, plate: str, confidence: float) -> dict:
+    if img is not None:
+        return calculate_quality_score(img, plate, confidence)
+    return {
+        "quality_score":    confidence,
+        "combined_score":   confidence,
+        "sharpness":        0.5,
+        "contrast_score":   0.5,
+        "brightness_score": 0.5,
+        "ocr_clarity":      confidence,
+    }
 
 
 def _handle_auto_detection(plate: str, source: str, confidence: float,
-                            strategy: str, img: np.ndarray = None,
-                            bbox_width: int = 0, image_path: str = None) -> dict:
+                            strategy: str, img: np.ndarray = None) -> dict:
     """
-    Lógica central de entrada/salida automática.
+    Registra cada lectura de patente como un avistamiento — sin decidir
+    automáticamente si es entrada o salida.
 
-    Señal de dirección (DirectionTracker):
-      DEPARTING  → fuerza EXIT si el auto está en parking, o descarta la
-                   detección si no está (auto ya salió y sigue en cuadro)
-      APPROACHING → staging normal (entrada probable)
-      UNKNOWN    → comportamiento estándar (vehicle_exists decide)
+    2026-07-17: se desconectó DirectionTracker (geometría de posición/
+    tamaño para clasificar APPROACHING/DEPARTING). El modelo de dirección
+    no era confiable: generaba tanto salidas falsas (con la peor foto de
+    la ráfaga, ya que necesita varias muestras consistentes antes de
+    confirmar y para entonces el auto ya se había alejado) como
+    duplicados. El archivo sigue en api/direction_tracker.py por si se
+    retoma más adelante.
 
-    EXIT es siempre inmediato.
-    ENTRY pasa por el buffer de staging (dedup + quality).
+    Por ahora toda detección compite por la mejor foto de la misma forma
+    (staging, ventana corta) y queda logueada para revisión — el frontend
+    decidirá más adelante cómo mostrar, por patente, las fotos de sus
+    avistamientos. La apertura/cierre real de parking_sessions sigue
+    siendo manual (/api/entry, /api/exit).
     """
-    # 1. Registrar lectura en el tracker y obtener señal de dirección
-    direction = _direction.record(plate, bbox_width)
+    # No hay match exacto, pero puede ser el mismo auto mal leído antes
+    # (dígito perdido por luces, carácter confundido). Si hay una sesión
+    # recién abierta con patente muy parecida, se corrige esa sesión en
+    # vez de crear un ENTRY duplicado. Reutiliza correct_session_plate:
+    # misma lógica que usa un admin al corregir manualmente (renombra
+    # archivos, reasigna detection_log/staging_detections).
+    similar = find_similar_active_session(plate)
+    if similar:
+        try:
+            correct_session_plate(similar["id"], plate, "system_ocr_correction")
+        except (ValueError, FileExistsError, LookupError) as e:
+            log_audit_event(plate, "AUTO_CORRECTION_FAILED",
+                             {"session_id": similar["id"], "old_plate": similar["plate"],
+                              "attempted_plate": plate, "error": str(e)})
+        else:
+            log_audit_event(plate, "AUTO_CORRECTED_OCR",
+                             {"session_id": similar["id"], "old_plate": similar["plate"],
+                              "new_plate": plate, "distance": similar["distance"],
+                              "confidence": confidence, "source": source})
+        return {"plate": plate, "action": "AUTO_CORRECTED_OCR", "registered": False,
+                "confidence": confidence,
+                "old_plate": similar["plate"], "session_id": similar["id"],
+                "image_path": None}
 
-    # Con ≥3 lecturas usamos la tendencia (más robusta que última comparación)
-    history_len = len(_direction._history.get(plate, []))
-    if history_len >= 3:
-        direction = _direction.get_trend(plate)
-
-    # 2. Si la dirección indica alejamiento Y el auto está estacionado → EXIT
-    if direction == "DEPARTING" and vehicle_exists(plate):
-        remove_vehicle(plate, image_path=image_path)
-        log_to_csv(plate, "EXIT", status="FTP_AUTO", image_path=image_path)
-        _append_ftp_event(plate, source, confidence, strategy, action="EXIT")
-        _direction.clear(plate)
-        return {"plate": plate, "action": "EXIT", "registered": True,
-                "confidence": confidence, "strategy": strategy,
-                "direction": direction}
-
-    # 3. Si la dirección indica alejamiento pero NO está estacionado → ignorar
-    #    (auto saliendo del campo visual sin haber entrado, o ya procesado)
-    if direction == "DEPARTING" and not vehicle_exists(plate):
-        return {"plate": plate, "action": "SKIP_DEPARTING", "registered": False,
-                "confidence": confidence, "direction": direction}
-
-    # 4. Si UNKNOWN o APPROACHING pero ya está en parking → SKIP (no registrar EXIT)
-    #    (la ráfaga de fotos mientras está quieto no debe generar exits falsos)
-    if (direction == "UNKNOWN" or direction == "APPROACHING") and vehicle_exists(plate):
-        return {"plate": plate, "action": "SKIP_ALREADY_PARKED", "registered": False,
-                "confidence": confidence, "direction": direction}
-
-    # 5. Calcular quality score y enviar a staging
-    if img is not None:
-        quality = calculate_quality_score(img, plate, confidence)
-    else:
-        quality = {
-            "quality_score":    confidence,
-            "combined_score":   confidence,
-            "sharpness":        0.5,
-            "contrast_score":   0.5,
-            "brightness_score": 0.5,
-            "ocr_clarity":      confidence,
-        }
-
-    staging_result = staging_submit(plate, confidence, quality, strategy, image_path)
+    # Calcular quality score y enviar a staging (decide ahí si guarda la imagen)
+    quality = _quality_for(img, plate, confidence)
+    staging_result = staging_submit(plate, confidence, quality, strategy, img)
     _append_ftp_event(plate, source, confidence, strategy, action="STAGED")
     return {"plate": plate, "action": "STAGED", "registered": False,
             "confidence": confidence, "strategy": strategy,
-            "direction": direction, "staging": staging_result}
+            "staging": staging_result,
+            "image_path": staging_result.get("image_path")}
 
 
 # ─────────────────────────── Background task video ──────────────────────────
 
 def _process_ftp_video_and_register(video_path: str, result_csv_path: str):
-    _process_video_task(video_path, result_csv_path)
+    # auto_register=False: el registro lo hace acá _handle_auto_detection,
+    # pasando el frame confirmado para que compita por calidad en staging
+    # igual que las fotos (antes se descartaba y el video nunca aportaba imagen).
+    _process_video_task(video_path, result_csv_path, auto_register=False)
 
     if not os.path.exists(result_csv_path):
         print(f"ftp_video: no CSV at {result_csv_path}")
@@ -237,11 +155,23 @@ def _process_ftp_video_and_register(video_path: str, result_csv_path: str):
             plate = row.get("Plate", "").strip()
             if not plate:
                 continue
+
+            frame_path = (row.get("FramePath") or "").strip()
+            img = None
+            if frame_path and os.path.exists(frame_path):
+                img = cv2.imread(frame_path)
+
             result = _handle_auto_detection(
                 plate, "video",
-                float(row.get("Confidence", 0)), "video_clahe"
+                float(row.get("Confidence", 0)), "video_clahe", img=img,
             )
             print(f"ftp_video {result['action']}: {plate}")
+
+            if frame_path and os.path.exists(frame_path):
+                try:
+                    os.remove(frame_path)
+                except OSError:
+                    pass
 
 
 # ─────────────────────────── FTP Endpoints ──────────────────────────────────
@@ -265,24 +195,14 @@ async def ftp_image(image: UploadFile = File(...)):
         return {"plate": None, "registered": False, "error": "no_detection"}
 
     plate = result["plate"]
-    now_dt = now_cl()
-    date_str = now_dt.strftime("%Y-%m-%d")
-    time_str = now_dt.strftime("%H-%M-%S")
 
-    # Save image to disk
-    os.makedirs(FTP_ARCHIVE_DIR + "/" + date_str, exist_ok=True)
-    filename = f"{time_str}_{plate}_{date_str}.jpg"
-    filepath = os.path.join(FTP_ARCHIVE_DIR, date_str, filename)
-    cv2.imwrite(filepath, img)
-    image_path = f"historico/{date_str}/{filename}"
-
-    # Return detection result with image path
+    # La imagen se guarda dentro de _handle_auto_detection, solo si la
+    # detección efectivamente se usa (mejor candidata vigente en staging).
     detect_result = _handle_auto_detection(
-        plate, "image", result["confidence"], result["strategy"],
-        img=img, bbox_width=result.get("bbox_width", 0), image_path=image_path,
+        plate, "image", result["confidence"], result["strategy"], img=img,
     )
-    detect_result["image_path"] = image_path
-    detect_result["image_url"] = f"/api/monitor/file/{image_path}"
+    image_path = detect_result.get("image_path")
+    detect_result["image_url"] = f"/api/monitor/file/{image_path}" if image_path else None
     return detect_result
 
 
