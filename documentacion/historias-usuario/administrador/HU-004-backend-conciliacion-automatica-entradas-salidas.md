@@ -6,6 +6,7 @@
 **Issue:** pendiente
 **Project 4:** pendiente
 **Creado por:** Francisco
+**ADR relacionada:** [ADR-001 — Reactivar DirectionTracker acotado a desempate, con plan de mejora iterativa](../../decisiones/ADR-001-reactivar-direction-tracker-acotado.md)
 
 ## Historia
 
@@ -31,7 +32,8 @@ Además, la clasificación automática de dirección (`api/direction_tracker.py`
 2026-07-17: usaba señal geométrica (posición/tamaño de la patente en 2-3
 frames) para decidir entrada/salida de **cada** detección, y producía salidas
 falsas (con la peor foto de la ráfaga) y duplicados. Esta HU la reactiva, pero
-acotada solo al caso ambiguo — ver "Propuesta técnica".
+acotada solo al caso ambiguo — ver "Propuesta técnica" y la justificación
+completa de esta decisión en ADR-001 (enlazada arriba).
 
 Esta HU cubre exclusivamente el backend (algoritmo de matching + endpoints).
 La vista de tres columnas que consume estos datos es una HU aparte para no
