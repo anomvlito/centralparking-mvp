@@ -3,10 +3,17 @@
 **Actor:** `administrador`
 **Estado:** `backlog`
 **Feature relacionada:** [Conciliación automática de entradas y salidas](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
-**Issue:** pendiente
-**Project 4:** pendiente
+**Issue:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22)
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Backlog` / `Todo`
 **Creado por:** Francisco
 **ADR relacionada:** [ADR-001 — Reactivar DirectionTracker acotado a desempate, con plan de mejora iterativa](../../decisiones/ADR-001-reactivar-direction-tracker-acotado.md)
+
+> **Refinamiento propuesto (2026-07-24):** el alcance de conciliación de esta
+> HU se mantiene, pero la señal de `DirectionTracker` será la definida por
+> [HU-007 — Trayectoria vertical](./HU-007-clasificar-direccion-trayectoria-vertical.md)
+> y [ADR-003](../../decisiones/ADR-003-clasificacion-direccion-trayectoria-vertical.md):
+> exclusivamente `y(t)`, sin X, tamaño ni zonas. HU-007/008/009 deben estar
+> verificadas antes de habilitar efectos productivos.
 
 ## Historia
 
@@ -48,8 +55,11 @@ acoplar ambos repos en una sola entrega.
   (`remove_vehicle`, guarda `exit_image_path`).
 - [ ] Cuando no hay sesión abierta que matchee, el backend usa
   `DirectionTracker` (reactivado, acotado a este caso ambiguo) para decidir
-  si crea una entrada nueva (`APPROACHING`/`UNKNOWN`) o una salida sin entrada
-  pendiente de revisión (`DEPARTING`), insertada en `orphan_exits`.
+  si crea una entrada nueva (`APPROACHING`) o una salida sin entrada pendiente
+  de revisión (`DEPARTING`), insertada en `orphan_exits`.
+- [ ] `UNKNOWN` se trata como evidencia insuficiente: conserva el avistamiento
+  y su evidencia para revisión/manual, pero no abre ni cierra una sesión y no
+  crea una salida huérfana.
 - [ ] Existen `GET /api/dashboard/entries-open`, `GET
   /api/dashboard/exits-orphan` (solo `status='PENDING'` por defecto) y `GET
   /api/dashboard/sessions-closed`, con los shapes definidos en "Propuesta
@@ -88,8 +98,9 @@ acoplar ambos repos en una sola entrega.
     avistamiento a decidir y ejecutar entrada/salida automática según el
     algoritmo descrito en "Propuesta técnica".
   - `api/direction_tracker.py` — reactivar `DirectionTracker`, acotado a
-    desempatar solo el caso sin sesión abierta que matchee (no decide
-    dirección del 100% de las detecciones, a diferencia de su uso original).
+    desempatar solo el caso sin sesión abierta que matchee y usando la
+    trayectoria vertical exclusiva definida por HU-007 (no decide dirección
+    del 100% de las detecciones, a diferencia de su uso original).
   - `api/database.py` — nueva tabla `orphan_exits`; nuevas funciones de
     consulta para las 3 columnas y para fusionar entrada+salida de una
     sesión cerrada.
@@ -103,8 +114,51 @@ acoplar ambos repos en una sola entrega.
 
 ## Contratos que deben preservarse
 
-- `/api/cars` y su contrato actual (usado por `Historial` y `App` para el set
-  de patentes parqueadas).
+- `/api/cars` conserva literalmente el contrato de estado actual de vehículos:
+
+  ```ts
+  type ParkedCar = {
+    plate: string;
+    entryTime: number;
+    isEvent: boolean;
+    eventFee?: number | null;
+  };
+
+  type CarsResponse = Record<string, ParkedCar>;
+  ```
+
+  `CarsResponse` sigue siendo un mapa indexado por patente; no se reemplaza
+  por ninguno de los DTO del dashboard.
+- Los DTO adicionales del dashboard quedan congelados así:
+
+  ```ts
+  type EntryOpen = {
+    session_id: number;
+    plate: string;
+    entry_time: string;
+    entry_image_url: string | null;
+  };
+
+  type ExitOrphan = {
+    orphan_exit_id: number;
+    plate: string;
+    exit_time: string;
+    exit_image_url: string | null;
+    confidence: number;
+    status: "PENDING" | "MATCHED" | "DISMISSED";
+  };
+
+  type SessionClosed = {
+    session_id: number;
+    plate: string;
+    entry_time: string;
+    entry_image_url: string | null;
+    exit_time: string;
+    exit_image_url: string | null;
+    duration_minutes: number;
+    fee: number;
+  };
+  ```
 - `/api/history` sin cambios (Historial sigue funcionando igual);
   `/api/dashboard/sessions-closed` es adicional, no un reemplazo.
 - `/api/entry` y `/api/exit/{plate}` mantienen su contrato manual actual como
@@ -149,9 +203,11 @@ controladas antes de habilitarlo contra la cámara real.
     `entries-open`.
   - Salida detectada sin sesión abierta y `DirectionTracker` = `DEPARTING` →
     aparece en `exits-orphan`, no crea entrada falsa.
-  - Salida detectada sin sesión abierta y `DirectionTracker` =
-    `APPROACHING`/`UNKNOWN` → abre entrada nueva, aparece en
-    `entries-open`.
+  - Detección sin sesión abierta y `DirectionTracker` = `APPROACHING` → abre
+    entrada nueva y aparece en `entries-open`.
+  - Detección sin sesión abierta y `DirectionTracker` = `UNKNOWN` → conserva
+    el avistamiento/evidencia para revisión manual y no modifica
+    `parking_sessions` ni `orphan_exits`.
   - `PATCH .../match` → sesión se cierra, ambos desaparecen de sus endpoints
     de pendientes, el par aparece en `sessions-closed`.
   - `PATCH .../dismiss` → desaparece de `exits-orphan`, la fila persiste en
@@ -168,10 +224,13 @@ controladas antes de habilitarlo contra la cámara real.
      `find_similar_active_session`);
    - si hay match → cerrar esa sesión (`remove_vehicle`, guarda
      `exit_image_path`);
-   - si no hay match → consultar `DirectionTracker.record(plate, center_x,
-     center_y, size)` con las muestras de este pase de cámara:
-     `APPROACHING`/`UNKNOWN` → abrir entrada nueva (`upsert_vehicle`);
-     `DEPARTING` → insertar en `orphan_exits`.
+   - si no hay match → consultar el contrato vertical definido por HU-007,
+     equivalente a `DirectionTracker.record(plate, center_y, timestamp)`, con
+     las muestras de este pase de cámara:
+     `APPROACHING` → abrir entrada nueva (`upsert_vehicle`);
+     `DEPARTING` → insertar en `orphan_exits`;
+     `UNKNOWN` → conservar avistamiento/evidencia en el flujo de
+     staging/revisión, sin mutar sesiones ni salidas huérfanas.
 3. Exponer los siguientes endpoints —
 
    `GET /api/dashboard/entries-open`:

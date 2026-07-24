@@ -5,6 +5,13 @@
 **Creado por:** Francisco
 **HUs relacionadas:** [HU-004 — Backend: conciliación automática de entradas y salidas](../historias-usuario/administrador/HU-004-backend-conciliacion-automatica-entradas-salidas.md), [HU-005 — Frontend: dashboard de tres columnas para conciliar entradas y salidas](../historias-usuario/administrador/HU-005-frontend-dashboard-tres-columnas-conciliacion.md)
 
+> **Refinamiento propuesto (2026-07-24):** ADR-001 conserva la decisión de
+> usar dirección solo como desempate revisable. La señal geométrica concreta
+> queda refinada, aún como propuesta no implementada, por
+> [ADR-003 — Clasificar dirección exclusivamente por trayectoria vertical](./ADR-003-clasificacion-direccion-trayectoria-vertical.md):
+> solo `y(t)` normalizado contra la imagen truncada, sin X, tamaño ni cruce de
+> zonas. Ver [HU-007](../historias-usuario/administrador/HU-007-clasificar-direccion-trayectoria-vertical.md).
+
 ## Contexto
 
 `api/direction_tracker.py` implementa `DirectionTracker`: clasifica una
@@ -39,12 +46,15 @@ el sistema hoy para resolver ese caso sin intervención humana — es
 Reactivar `DirectionTracker`, pero con un alcance deliberadamente más
 acotado que su uso original: se consulta **solo** cuando no hay ninguna
 sesión abierta que matchee la patente detectada (ni exacta ni difusa vía
-`find_similar_active_session`). En ese caso:
+`find_similar_active_session`). En ese caso, aplicando el refinamiento
+vertical de ADR-003:
 
-- `APPROACHING` o `UNKNOWN` → se asume entrada nueva (`upsert_vehicle`).
+- `APPROACHING` → se asume entrada nueva (`upsert_vehicle`).
 - `DEPARTING` → se registra como salida sin entrada asociada
   (`orphan_exits`), pendiente de revisión manual — nunca cierra ni cobra una
   sesión de forma autoritativa.
+- `UNKNOWN` → se conserva el avistamiento y su evidencia para revisión/manual,
+  sin abrir o cerrar sesiones y sin crear una salida huérfana.
 
 Esta reactivación es intencionalmente el primer paso de un camino iterativo,
 no un fin en sí mismo: la intención de fondo es **volver a tener

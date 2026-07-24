@@ -1,11 +1,17 @@
 # Feature — Conciliación automática de entradas y salidas en el Dashboard
 
-**Etapa Project 4:** `Backlog`
+**Etapa Project 4:** `In progress`
 **HUs relacionadas:**
-- [HU-004 — Backend: conciliación automática de entradas y salidas](../../historias-usuario/administrador/HU-004-backend-conciliacion-automatica-entradas-salidas.md)
-- [HU-005 — Frontend: dashboard de tres columnas para conciliar entradas y salidas](../../historias-usuario/administrador/HU-005-frontend-dashboard-tres-columnas-conciliacion.md) (depende de HU-004)
+- [HU-004 — Backend: conciliación automática de entradas y salidas](../../historias-usuario/administrador/HU-004-backend-conciliacion-automatica-entradas-salidas.md) — `backlog`
+- [HU-005 — Frontend: dashboard de tres columnas para conciliar entradas y salidas](../../historias-usuario/administrador/HU-005-frontend-dashboard-tres-columnas-conciliacion.md) — `en-progreso` (implementada contra mock, depende de HU-004 para verificación real)
 
-**Issues:** pendiente
+**Issues:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22) (HU-004), [#23](https://github.com/anomvlito/centralparking-mvp/issues/23) (HU-005)
+
+> **Dependencia propuesta (2026-07-24):** la reactivación de dirección de
+> HU-004 debe consumir la trayectoria vertical exclusiva de
+> [HU-007](../../historias-usuario/administrador/HU-007-clasificar-direccion-trayectoria-vertical.md),
+> con configuración y auditoría de HU-008/HU-009. No usar X, tamaño ni cruce
+> de zonas.
 
 ## Problema
 
@@ -55,8 +61,15 @@ administrador.
 
 - `/api/cars`, `/api/history`, `/api/entry`, `/api/exit/{plate}` mantienen su
   contrato actual.
+- `/api/cars` devuelve `CarsResponse = Record<string, ParkedCar>`, donde
+  `ParkedCar` contiene `plate`, `entryTime`, `isEvent` y
+  `eventFee?: number | null`.
+- `EntryOpen`, `ExitOrphan` y `SessionClosed` son proyecciones adicionales del
+  dashboard y no reemplazan `ParkedCar`.
 - `orphan_exits` nunca se borra; `dismiss` solo cambia de estado.
 - Ningún registro puede aparecer simultáneamente en columna 1/2 y columna 3.
+- El clasificador consume solo `center_y` y `timestamp`; `UNKNOWN` conserva el
+  avistamiento para revisión sin modificar sesiones ni `orphan_exits`.
 
 ## Riesgos
 

@@ -75,6 +75,22 @@ su contrato estable), esta HU no puede completarse contra datos reales.
 
 ## Contratos que deben preservarse
 
+- El estado actual de un auto dentro del estacionamiento conserva un contrato
+  distinto de los objetos de las tres columnas:
+
+  ```ts
+  type ParkedCar = {
+    plate: string;
+    entryTime: number;
+    isEvent: boolean;
+    eventFee?: number | null;
+  };
+
+  type CarsResponse = Record<string, ParkedCar>;
+  ```
+
+  `EntryOpen`, `ExitOrphan` y `SessionClosed` no reemplazan `ParkedCar` ni
+  cambian el shape de `GET /api/cars`.
 - Los shapes de respuesta de `GET /api/dashboard/entries-open`, `GET
   /api/dashboard/exits-orphan`, `GET /api/dashboard/sessions-closed` y
   `PATCH /api/dashboard/exits-orphan/{id}` definidos en HU-004 — cualquier
