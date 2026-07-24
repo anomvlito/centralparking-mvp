@@ -2,7 +2,7 @@
 
 **Actor:** `administrador`
 **Estado:** `backlog`
-**Feature relacionada:** [Conciliación automática de entradas y salidas](../../features/backlog/conciliacion-automatica-entradas-salidas.md)
+**Feature relacionada:** [Conciliación automática de entradas y salidas](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
 **Issue:** pendiente
 **Project 4:** pendiente
 **Creado por:** Francisco

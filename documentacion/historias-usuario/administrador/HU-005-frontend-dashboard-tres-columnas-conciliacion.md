@@ -1,10 +1,10 @@
 # HU-005 — Frontend: dashboard de tres columnas para conciliar entradas y salidas
 
 **Actor:** `administrador`
-**Estado:** `backlog`
-**Feature relacionada:** [Conciliación automática de entradas y salidas](../../features/backlog/conciliacion-automatica-entradas-salidas.md)
-**Issue:** pendiente
-**Project 4:** pendiente
+**Estado:** `en-progreso`
+**Feature relacionada:** [Conciliación automática de entradas y salidas](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
+**Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress`
 **Creado por:** Francisco
 
 ## Historia
@@ -120,5 +120,42 @@ usando tal cual, ya que ese feed no cambia en esta HU).
 
 ## Evidencia de implementación
 
-- Commit/PR: pendiente.
-- Verificaciones: pendientes.
+- Rama: `agent/hu-001-boton-ingresar-lila` en
+  `adyac-camaras-frontend` (checkout ya activo, sin worktree aislado nuevo —
+  autorizado explícitamente así por el usuario, sin push/PR/merge/deploy en
+  esta etapa por el bloqueo de dependencia con HU-004).
+- Implementado contra mock local: `src/lib/dashboardMock.ts` (tipos +
+  `fetchDashboardData`/`patchExitOrphan` con el contrato exacto de HU-004,
+  estado mutable en memoria para que match/dismiss se reflejen en las 3
+  columnas). Punto de integración real documentado en el propio archivo:
+  reemplazar el cuerpo de esas dos funciones por `apiFetch` a
+  `/api/dashboard/*` cuando HU-004 exista.
+- `Dashboard` reescrito en `src/app/page.tsx` como grid de 3 columnas
+  (`EntryOpenCard`, `ExitOrphanCard`, `SessionClosedCard`, `DashboardColumn`),
+  con selección de salida huérfana + confirmación en columna de entradas para
+  el match manual, botón de dismiss con confirmación, y polling cada
+  `DASHBOARD_REFRESH_MS` (15s, mismo valor que usaba el feed anterior).
+- Efecto colateral documentado (mismo criterio que HU-003 con `stats`): al
+  dejar de pasar `stats`/`history`/`parked`/`loading` desde `App` a
+  `Dashboard`, esas 4 variables y el componente `StatCard` quedan sin uso en
+  `page.tsx`. No se retiraron sus llamadas/`useState` ni el polling de
+  `App.refresh()` (`/api/stats`, `/api/history`, `/api/sightings`,
+  `/api/cars`) — requiere autorización separada, igual que en HU-003.
+- `npm run lint`: correcto, 0 errores, 7 advertencias (2 preexistentes de
+  `no-img-element`; 5 esperadas por el punto anterior: `StatCard`, `stats`,
+  `history`, `parked`, `loading` sin uso).
+- `npx tsc --noEmit`: correcto, sin errores.
+- `npm run build`: correcto, ejecutado en copia aislada (`rsync` a
+  scratchpad) porque hay un proceso `next start` sirviendo el `.next` de este
+  repo — no se tocó ese proceso ni su build.
+- Sin suite de tests: este branch no tiene `test` en `package.json` ni
+  dependencias de testing (a diferencia de lo reportado en la evidencia de
+  HU-003, que corrió en otro branch/worktree con tests configurados) — no se
+  fingió cobertura.
+- Sin verificación visual en navegador: `API` apunta al backend de
+  producción (`https://2.24.69.49.nip.io`) y no hay credenciales disponibles
+  para loguearse ahí de forma segura en este entorno — pendiente de
+  validación visual real.
+- Commit/PR: pendiente (no autorizado en esta etapa).
+- Bloqueo activo: no se puede verificar end-to-end contra datos reales hasta
+  que HU-004 (backend) esté implementada.
