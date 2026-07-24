@@ -283,6 +283,58 @@ def log_audit_event(plate: Optional[str], event_type: str, details: dict):
             """, (plate, event_type, json.dumps(details)))
 
 
+def get_direction_audit_metrics(date: str = None, limit: int = 5000) -> dict:
+    """Agrega evaluaciones direccionales sin exponer patentes."""
+    bounded_limit = max(1, min(limit, 10000))
+    with _db() as conn:
+        with conn.cursor() as cur:
+            if date:
+                cur.execute("""
+                    SELECT details
+                    FROM audit_log
+                    WHERE event_type = 'DIRECTION_EVALUATED'
+                      AND logged_at::date = %s::date
+                    ORDER BY logged_at DESC
+                    LIMIT %s
+                """, (date, bounded_limit))
+            else:
+                cur.execute("""
+                    SELECT details
+                    FROM audit_log
+                    WHERE event_type = 'DIRECTION_EVALUATED'
+                    ORDER BY logged_at DESC
+                    LIMIT %s
+                """, (bounded_limit,))
+            rows = cur.fetchall()
+
+    directions: dict[str, int] = {}
+    unknown_reasons: dict[str, int] = {}
+    modes: dict[str, int] = {}
+    configurations: dict[str, int] = {}
+    for row in rows:
+        details = row["details"]
+        if isinstance(details, str):
+            details = json.loads(details)
+        direction = details.get("direction", "UNKNOWN")
+        directions[direction] = directions.get(direction, 0) + 1
+        if direction == "UNKNOWN":
+            reason = details.get("reason") or "unspecified"
+            unknown_reasons[reason] = unknown_reasons.get(reason, 0) + 1
+        mode = details.get("mode", "unknown")
+        modes[mode] = modes.get(mode, 0) + 1
+        version = details.get("config_version", "unknown")
+        configurations[version] = configurations.get(version, 0) + 1
+
+    return {
+        "total": len(rows),
+        "directions": directions,
+        "unknown_reasons": unknown_reasons,
+        "modes": modes,
+        "configurations": configurations,
+        "truncated": len(rows) == bounded_limit,
+    }
+
+
 # ─────────────────────── log / historial ────────────────────────────────────
 
 def log_to_db(plate: str, action: str, status: str = "REAL",

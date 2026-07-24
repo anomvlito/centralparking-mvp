@@ -1,89 +1,156 @@
+import os
 import unittest
+from unittest.mock import patch
 
+from api.core.config import DirectionSettings
 from api.direction_tracker import DirectionTracker
+
+
+class DirectionSettingsTests(unittest.TestCase):
+    def test_defaults_are_disabled_and_observation_only(self):
+        settings = DirectionSettings.from_env({})
+        self.assertFalse(settings.enabled)
+        self.assertTrue(settings.observation_only)
+        self.assertEqual(settings.mode, "disabled")
+
+    def test_hash_changes_with_relevant_parameter(self):
+        default = DirectionSettings()
+        changed = DirectionSettings(min_displacement=0.12)
+        self.assertNotEqual(default.version, changed.version)
+
+    def test_invalid_enabled_configuration_fails_clearly(self):
+        with self.assertRaisesRegex(ValueError, "MIN_SAMPLES"):
+            DirectionSettings.from_env(
+                {
+                    "DIRECTION_ENABLED": "true",
+                    "DIRECTION_MIN_SAMPLES": "2",
+                }
+            )
+
+    def test_legacy_axis_and_size_variables_do_not_affect_settings(self):
+        baseline = DirectionSettings.from_env({})
+        with_legacy = DirectionSettings.from_env(
+            {
+                "DIRECTION_AXIS": "x",
+                "DIRECTION_SIZE_MIN_DISPLACEMENT": "0.99",
+            }
+        )
+        self.assertEqual(baseline, with_legacy)
+
+    def test_invalid_thresholds_are_inert_while_disabled(self):
+        settings = DirectionSettings.from_env(
+            {
+                "DIRECTION_ENABLED": "false",
+                "DIRECTION_MIN_SAMPLES": "not-a-number",
+                "DIRECTION_MIN_DISPLACEMENT": "invalid",
+            }
+        )
+        self.assertEqual(settings, DirectionSettings())
 
 
 class DirectionTrackerTests(unittest.TestCase):
     def setUp(self):
-        self.now = 0.0
-        self.tracker = DirectionTracker(
-            axis="y", entry_sign="positive", clock=lambda: self.now
+        self.settings = DirectionSettings(
+            enabled=True,
+            observation_only=True,
+            window_seconds=15,
+            min_samples=3,
+            max_history=8,
+            min_displacement=0.08,
+            min_slope_per_second=0.01,
+            min_consistency=0.67,
+            entry_sign="positive",
         )
+        self.tracker = DirectionTracker(self.settings)
 
-    def record(self, positions, sizes=None):
-        result = "UNKNOWN"
-        sizes = sizes or [None] * len(positions)
-        for position, size in zip(positions, sizes):
-            result = self.tracker.record("ABCD12", 0.5, position, size)
-            self.now += 1
-        return result
+    def evaluate(self, positions, times=None):
+        times = times or list(range(len(positions)))
+        evaluation = None
+        for timestamp, position in zip(times, positions):
+            evaluation = self.tracker.evaluate(
+                "SYNTH01",
+                position,
+                timestamp,
+                geometry_strategy="raw",
+            )
+        return evaluation
 
-    def test_positive_consistent_movement_is_entry(self):
-        self.assertEqual(self.record([0.10, 0.15, 0.22]), "APPROACHING")
+    def test_positive_regular_movement_is_entry(self):
+        result = self.evaluate([0.10, 0.15, 0.22])
+        self.assertEqual(result.direction, "APPROACHING")
+        self.assertIsNone(result.reason)
 
-    def test_negative_consistent_movement_is_exit(self):
-        self.assertEqual(self.record([0.80, 0.74, 0.65]), "DEPARTING")
+    def test_negative_regular_movement_is_exit(self):
+        result = self.evaluate([0.80, 0.74, 0.65])
+        self.assertEqual(result.direction, "DEPARTING")
 
-    def test_small_jitter_does_not_classify_direction(self):
-        self.assertEqual(self.record([0.50, 0.52, 0.49, 0.51]), "UNKNOWN")
-
-    def test_inconsistent_trajectory_is_not_classified(self):
-        self.assertEqual(
-            self.record([0.10, 0.25, 0.12, 0.30]),
-            "UNKNOWN",
-        )
-
-    def test_axis_is_configurable(self):
+    def test_entry_sign_can_be_inverted(self):
         tracker = DirectionTracker(
-            axis="x", entry_sign="negative", clock=lambda: self.now
+            DirectionSettings(
+                enabled=True,
+                observation_only=True,
+                entry_sign="negative",
+            )
         )
-        result = "UNKNOWN"
-        for position in [0.80, 0.72, 0.60]:
-            result = tracker.record("EFGH34", position, 0.5)
-            self.now += 1
-        self.assertEqual(result, "APPROACHING")
+        direction = "UNKNOWN"
+        for timestamp, y in enumerate([0.80, 0.74, 0.65]):
+            direction = tracker.record("SYNTH02", y, timestamp)
+        self.assertEqual(direction, "APPROACHING")
 
-    def test_growing_size_is_entry_even_without_lateral_movement(self):
-        # Cámara casi de frente: la posición apenas se mueve (jitter < umbral)
-        # pero el tamaño de la patente crece de forma consistente.
-        result = self.record(
-            positions=[0.50, 0.51, 0.49, 0.50],
-            sizes=[0.03, 0.05, 0.07, 0.09],
+    def test_zero_one_and_two_samples_are_unknown(self):
+        self.assertEqual(
+            self.tracker.evaluate("SYNTH01", 0.1, 0).reason,
+            "insufficient_samples",
         )
-        self.assertEqual(result, "APPROACHING")
+        self.assertEqual(
+            self.tracker.evaluate("SYNTH01", 0.2, 1).reason,
+            "insufficient_samples",
+        )
 
-    def test_shrinking_size_is_exit_even_without_lateral_movement(self):
-        result = self.record(
-            positions=[0.50, 0.49, 0.51, 0.50],
-            sizes=[0.09, 0.07, 0.05, 0.03],
-        )
-        self.assertEqual(result, "DEPARTING")
+    def test_small_displacement_is_unknown(self):
+        result = self.evaluate([0.50, 0.52, 0.54])
+        self.assertEqual(result.direction, "UNKNOWN")
+        self.assertEqual(result.reason, "insufficient_displacement")
 
-    def test_size_signal_ignored_when_incomplete_history(self):
-        # Si alguna lectura no trae tamaño (p.ej. vino de una estrategia sin
-        # geometría), no se usa el tamaño como señal para esa ventana.
-        result = self.record(
-            positions=[0.50, 0.51, 0.49, 0.50],
-            sizes=[0.03, None, 0.07, 0.09],
-        )
-        self.assertEqual(result, "UNKNOWN")
+    def test_large_but_inconsistent_movement_is_unknown(self):
+        result = self.evaluate([0.10, 0.25, 0.12, 0.30])
+        self.assertEqual(result.direction, "UNKNOWN")
+        self.assertEqual(result.reason, "insufficient_consistency")
 
-    def test_position_wins_when_both_signals_present_and_agree(self):
-        result = self.record(
-            positions=[0.10, 0.15, 0.22],
-            sizes=[0.03, 0.05, 0.07],
-        )
-        self.assertEqual(result, "APPROACHING")
+    def test_irregular_timestamps_use_slope_per_second(self):
+        result = self.evaluate([0.10, 0.15, 0.30], [0.0, 0.5, 3.0])
+        self.assertEqual(result.direction, "APPROACHING")
+        self.assertGreater(result.slope_per_second, 0)
 
-    def test_stronger_signal_wins_when_signals_disagree(self):
-        # Posición baja de forma mayormente consistente (3/4, DEPARTING) pero
-        # el tamaño sube de forma perfectamente consistente (4/4, APPROACHING)
-        # → gana la señal con mayor consistencia (tamaño).
-        result = self.record(
-            positions=[0.70, 0.65, 0.60, 0.55, 0.60],
-            sizes=[0.03, 0.05, 0.07, 0.09, 0.11],
-        )
-        self.assertEqual(result, "APPROACHING")
+    def test_duplicate_or_unordered_timestamp_is_rejected(self):
+        self.tracker.evaluate("SYNTH01", 0.1, 1)
+        result = self.tracker.evaluate("SYNTH01", 0.2, 1)
+        self.assertEqual(result.reason, "invalid_timestamp")
+        self.assertEqual(self.tracker.sample_count("SYNTH01"), 1)
+
+    def test_coordinate_outside_normalized_range_is_rejected(self):
+        result = self.tracker.evaluate("SYNTH01", 1.01, 0)
+        self.assertEqual(result.reason, "invalid_coordinate")
+        self.assertEqual(self.tracker.sample_count("SYNTH01"), 0)
+
+    def test_history_expires_by_window(self):
+        self.tracker.evaluate("SYNTH01", 0.1, 0)
+        result = self.tracker.evaluate("SYNTH01", 0.3, 16)
+        self.assertEqual(result.reason, "insufficient_samples")
+        self.assertEqual(result.sample_count, 1)
+
+    def test_history_is_bounded(self):
+        for timestamp in range(12):
+            self.tracker.evaluate("SYNTH01", min(0.05 * timestamp, 0.95), timestamp)
+        self.assertEqual(self.tracker.sample_count("SYNTH01"), 8)
+
+    def test_evaluation_contains_auditable_evidence_without_plate(self):
+        result = self.evaluate([0.10, 0.15, 0.22])
+        payload = result.to_dict()
+        self.assertNotIn("plate", payload)
+        self.assertEqual(payload["geometry_strategy"], "raw")
+        self.assertEqual(payload["mode"], "observation_only")
+        self.assertTrue(payload["config_version"].startswith("sha256:"))
 
 
 if __name__ == "__main__":

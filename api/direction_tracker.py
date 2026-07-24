@@ -1,143 +1,245 @@
-"""Seguimiento temporal de patentes para clasificar entrada y salida.
+"""Clasificación de dirección exclusivamente por trayectoria vertical."""
 
-Combina dos señales geométricas porque cuál de las dos sirve depende del
-ángulo de la cámara respecto al flujo de autos:
+from __future__ import annotations
 
-  - posición (center_x/center_y): útil cuando el auto cruza el cuadro
-    lateralmente — el centro de la patente se desplaza de un lado a otro.
-  - tamaño (bbox normalizado de la patente): útil cuando el auto se mueve
-    de frente hacia/desde la cámara — ahí la posición casi no cambia, pero
-    el tamaño aparente crece o se achica de forma marcada.
-
-Cada lectura evalúa ambas señales con la misma lógica estadística (ventana
-temporal + mínimo de muestras + umbral de consistencia) y se usa la que
-efectivamente muestre una tendencia clara. Si ninguna la muestra, o si el
-ángulo de la cámara es intermedio y ninguna señal es lo bastante limpia,
-el resultado es UNKNOWN.
-"""
-
-import os
 import time
 from collections import defaultdict
-from typing import NamedTuple, Optional
+from dataclasses import asdict, dataclass
+from typing import Callable, Optional
+
+from api.core.config import DIRECTION_SETTINGS, DirectionSettings
 
 
-class _Trend(NamedTuple):
-    sign: int
-    consistency: float
+@dataclass(frozen=True)
+class DirectionEvaluation:
+    direction: str
+    reason: Optional[str]
+    sample_count: int
+    duration_seconds: float
+    start_y: Optional[float]
+    end_y: Optional[float]
+    displacement: Optional[float]
+    slope_per_second: Optional[float]
+    consistency: Optional[float]
+    config_version: str
+    geometry_strategy: Optional[str]
+    mode: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 class DirectionTracker:
-    WINDOW_SEC = float(os.environ.get("DIRECTION_WINDOW_SEC", "15"))
-    MIN_SAMPLES = max(2, int(os.environ.get("DIRECTION_MIN_SAMPLES", "3")))
-    MAX_HISTORY = max(MIN_SAMPLES, int(os.environ.get("DIRECTION_MAX_HISTORY", "8")))
+    """Mantiene hasta ocho muestras ``(timestamp, center_y)`` por patente.
 
-    # Posición: rango típico 0-1 con desplazamientos grandes cuando el auto
-    # cruza el cuadro.
-    POSITION_MIN_DISPLACEMENT = float(os.environ.get("DIRECTION_MIN_DISPLACEMENT", "0.08"))
-    POSITION_MIN_CONSISTENCY = float(os.environ.get("DIRECTION_MIN_CONSISTENCY", "0.67"))
+    ``record`` conserva el contrato compacto de resultado textual.
+    ``evaluate`` entrega la evidencia tipada requerida para auditoría.
+    """
 
-    # Tamaño: el bbox de una patente ocupa una fracción mucho más chica del
-    # cuadro, así que el umbral de desplazamiento es más bajo.
-    SIZE_MIN_DISPLACEMENT = float(os.environ.get("DIRECTION_SIZE_MIN_DISPLACEMENT", "0.03"))
-    SIZE_MIN_CONSISTENCY = float(os.environ.get("DIRECTION_SIZE_MIN_CONSISTENCY", "0.67"))
-
-    def __init__(self, axis: str = None, entry_sign: str = None, clock=None):
-        configured_axis = (axis or os.environ.get("DIRECTION_AXIS", "y")).lower()
-        if configured_axis not in {"x", "y"}:
-            raise ValueError("DIRECTION_AXIS debe ser 'x' o 'y'")
-        configured_sign = (entry_sign or os.environ.get(
-            "DIRECTION_ENTRY_SIGN", "positive"
-        )).lower()
-        if configured_sign not in {"positive", "negative"}:
-            raise ValueError("DIRECTION_ENTRY_SIGN debe ser 'positive' o 'negative'")
-
-        self.axis = configured_axis
-        self.entry_sign = 1 if configured_sign == "positive" else -1
+    def __init__(
+        self,
+        settings: DirectionSettings | None = None,
+        clock: Callable[[], float] | None = None,
+    ):
+        self.settings = settings or DIRECTION_SETTINGS
         self._clock = clock or time.monotonic
-        # plate -> [(timestamp, position, size_or_None)]
-        self._history = defaultdict(list)
+        self._history: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        self._latest: dict[str, DirectionEvaluation] = {}
 
-    def record(self, plate: str, center_x: float, center_y: float,
-               size: float = None) -> str:
-        if not (0.0 <= center_x <= 1.0 and 0.0 <= center_y <= 1.0):
-            return "UNKNOWN"
+    def record(
+        self,
+        plate: str,
+        center_y: float,
+        timestamp: float | None = None,
+        *,
+        geometry_strategy: str | None = None,
+    ) -> str:
+        return self.evaluate(
+            plate,
+            center_y,
+            timestamp,
+            geometry_strategy=geometry_strategy,
+        ).direction
 
-        now = self._clock()
-        position = center_x if self.axis == "x" else center_y
+    def evaluate(
+        self,
+        plate: str,
+        center_y: float,
+        timestamp: float | None = None,
+        *,
+        geometry_strategy: str | None = None,
+    ) -> DirectionEvaluation:
+        now = self._clock() if timestamp is None else float(timestamp)
+        if not 0.0 <= center_y <= 1.0:
+            return self._remember(
+                plate,
+                self._unknown(
+                    "invalid_coordinate",
+                    geometry_strategy=geometry_strategy,
+                ),
+            )
+
         history = self._history[plate]
         history[:] = [
-            (t, p, s) for t, p, s in history if now - t <= self.WINDOW_SEC
+            (sample_time, y)
+            for sample_time, y in history
+            if 0 <= now - sample_time <= self.settings.window_seconds
         ]
-        history.append((now, position, size))
-        if len(history) > self.MAX_HISTORY:
-            del history[:-self.MAX_HISTORY]
+        if history and now <= history[-1][0]:
+            return self._remember(
+                plate,
+                self._unknown(
+                    "invalid_timestamp",
+                    sample_count=len(history),
+                    geometry_strategy=geometry_strategy,
+                ),
+            )
 
-        return self._classify(history)
+        history.append((now, center_y))
+        if len(history) > self.settings.max_history:
+            del history[: -self.settings.max_history]
+
+        evaluation = self._classify(history, geometry_strategy)
+        return self._remember(plate, evaluation)
+
+    def _classify(
+        self,
+        history: list[tuple[float, float]],
+        geometry_strategy: str | None,
+    ) -> DirectionEvaluation:
+        if len(history) < self.settings.min_samples:
+            return self._unknown(
+                "insufficient_samples",
+                sample_count=len(history),
+                history=history,
+                geometry_strategy=geometry_strategy,
+            )
+
+        start_time, start_y = history[0]
+        end_time, end_y = history[-1]
+        duration = end_time - start_time
+        if duration <= 0:
+            return self._unknown(
+                "invalid_timestamp",
+                sample_count=len(history),
+                history=history,
+                geometry_strategy=geometry_strategy,
+            )
+
+        displacement = end_y - start_y
+        slope = self._linear_regression_slope(history)
+        consistency = self._consistency(history, displacement)
+
+        if abs(displacement) < self.settings.min_displacement:
+            reason = "insufficient_displacement"
+        elif abs(slope) < self.settings.min_slope_per_second:
+            reason = "insufficient_slope"
+        elif consistency < self.settings.min_consistency:
+            reason = "insufficient_consistency"
+        else:
+            reason = None
+
+        if reason:
+            direction = "UNKNOWN"
+        else:
+            movement_sign = 1 if slope > 0 else -1
+            entry_sign = 1 if self.settings.entry_sign == "positive" else -1
+            direction = (
+                "APPROACHING" if movement_sign == entry_sign else "DEPARTING"
+            )
+
+        return DirectionEvaluation(
+            direction=direction,
+            reason=reason,
+            sample_count=len(history),
+            duration_seconds=round(duration, 6),
+            start_y=round(start_y, 6),
+            end_y=round(end_y, 6),
+            displacement=round(displacement, 6),
+            slope_per_second=round(slope, 6),
+            consistency=round(consistency, 6),
+            config_version=self.settings.version,
+            geometry_strategy=geometry_strategy,
+            mode=self.settings.mode,
+        )
 
     @staticmethod
-    def _trend(values: list[float], min_displacement: float,
-               min_consistency: float) -> Optional[_Trend]:
-        if len(values) < 2:
-            return None
+    def _linear_regression_slope(
+        history: list[tuple[float, float]]
+    ) -> float:
+        origin = history[0][0]
+        times = [timestamp - origin for timestamp, _ in history]
+        values = [y for _, y in history]
+        mean_time = sum(times) / len(times)
+        mean_y = sum(values) / len(values)
+        denominator = sum((value - mean_time) ** 2 for value in times)
+        if denominator == 0:
+            return 0.0
+        return sum(
+            (timestamp - mean_time) * (y - mean_y)
+            for timestamp, y in zip(times, values)
+        ) / denominator
 
-        displacement = values[-1] - values[0]
-        if abs(displacement) < min_displacement:
-            return None
-
+    @staticmethod
+    def _consistency(
+        history: list[tuple[float, float]], displacement: float
+    ) -> float:
+        if displacement == 0:
+            return 0.0
+        expected = 1 if displacement > 0 else -1
         deltas = [
-            current - previous
-            for previous, current in zip(values, values[1:])
-            if current != previous
+            current_y - previous_y
+            for (_, previous_y), (_, current_y) in zip(history, history[1:])
         ]
-        if not deltas:
-            return None
-
-        movement_sign = 1 if displacement > 0 else -1
-        consistency = sum(
-            1 for delta in deltas if (1 if delta > 0 else -1) == movement_sign
-        ) / len(deltas)
-        if consistency < min_consistency:
-            return None
-
-        return _Trend(movement_sign, consistency)
-
-    def _classify(self, history: list[tuple[float, float, Optional[float]]]) -> str:
-        if len(history) < self.MIN_SAMPLES:
-            return "UNKNOWN"
-
-        positions = [position for _, position, _ in history]
-        sizes = [size for _, _, size in history if size is not None]
-        # El tamaño solo es comparable si todas las lecturas de la ventana lo
-        # traen (si alguna estrategia sin geometría se coló, se descarta).
-        if len(sizes) != len(history):
-            sizes = []
-
-        position_trend = self._trend(
-            positions, self.POSITION_MIN_DISPLACEMENT, self.POSITION_MIN_CONSISTENCY
+        moving = [delta for delta in deltas if delta != 0]
+        if not moving:
+            return 0.0
+        agreeing = sum(
+            1 for delta in moving if (1 if delta > 0 else -1) == expected
         )
-        size_trend = self._trend(
-            sizes, self.SIZE_MIN_DISPLACEMENT, self.SIZE_MIN_CONSISTENCY
-        ) if sizes else None
+        return agreeing / len(moving)
 
-        candidates = []
-        if position_trend:
-            direction = "APPROACHING" if position_trend.sign == self.entry_sign else "DEPARTING"
-            candidates.append((position_trend.consistency, direction))
-        if size_trend:
-            # Tamaño creciendo = auto acercándose a la cámara = entrando,
-            # sin importar el eje/signo configurado para la posición.
-            direction = "APPROACHING" if size_trend.sign > 0 else "DEPARTING"
-            candidates.append((size_trend.consistency, direction))
+    def _unknown(
+        self,
+        reason: str,
+        *,
+        sample_count: int = 0,
+        history: list[tuple[float, float]] | None = None,
+        geometry_strategy: str | None = None,
+    ) -> DirectionEvaluation:
+        history = history or []
+        duration = history[-1][0] - history[0][0] if len(history) > 1 else 0.0
+        return DirectionEvaluation(
+            direction="UNKNOWN",
+            reason=reason,
+            sample_count=sample_count,
+            duration_seconds=round(duration, 6),
+            start_y=round(history[0][1], 6) if history else None,
+            end_y=round(history[-1][1], 6) if history else None,
+            displacement=(
+                round(history[-1][1] - history[0][1], 6)
+                if len(history) > 1
+                else None
+            ),
+            slope_per_second=None,
+            consistency=None,
+            config_version=self.settings.version,
+            geometry_strategy=geometry_strategy,
+            mode=self.settings.mode,
+        )
 
-        if not candidates:
-            return "UNKNOWN"
+    def _remember(
+        self, plate: str, evaluation: DirectionEvaluation
+    ) -> DirectionEvaluation:
+        self._latest[plate] = evaluation
+        return evaluation
 
-        candidates.sort(key=lambda c: c[0], reverse=True)
-        return candidates[0][1]
+    def latest(self, plate: str) -> DirectionEvaluation | None:
+        return self._latest.get(plate)
 
-    def clear(self, plate: str):
+    def clear(self, plate: str) -> None:
         self._history.pop(plate, None)
+        self._latest.pop(plate, None)
 
     def sample_count(self, plate: str) -> int:
         return len(self._history.get(plate, []))
