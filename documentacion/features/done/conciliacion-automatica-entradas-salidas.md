@@ -1,6 +1,6 @@
 # Feature — Estadías conciliadas desde detecciones particulares
 
-**Etapa Project 4:** `In progress`
+**Etapa Project 4:** `Done`
 **HUs:** [HU-004](../../historias-usuario/administrador/HU-004-backend-conciliacion-automatica-entradas-salidas.md), [HU-005](../../historias-usuario/administrador/HU-005-frontend-dashboard-tres-columnas-conciliacion.md)
 **Issues:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22), [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
 
@@ -40,3 +40,10 @@ OCR o dirección sean inciertos.
 Backend y frontend desplegados; detecciones, conciliación manual, estadías,
 duración, auth y errores verificados; regresión existente correcta y evidencia
 de producción/preview registrada.
+
+## Evidencia
+
+- Backend: [PR #34](https://github.com/anomvlito/centralparking-mvp/pull/34),
+  deploy [30069920707](https://github.com/anomvlito/centralparking-mvp/actions/runs/30069920707).
+- Frontend: [PR #5](https://github.com/anomvlito/adyac-camaras-frontend/pull/5),
+  Vercel Production sobre `08b56d97bc6d758870f2cbc4ad0d723768f47f12`.
