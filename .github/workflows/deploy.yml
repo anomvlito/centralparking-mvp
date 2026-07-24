@@ -18,7 +18,7 @@ jobs:
             set -e
             cd /opt/services/centralparking/centralparking-mvp
             sudo -u fabian -H git -c safe.directory=/opt/services/centralparking/centralparking-mvp \
-              -C /opt/services/centralparking/centralparking-mvp pull origin main
+              -C /opt/services/centralparking/centralparking-mvp pull --no-rebase origin main
             .venv/bin/pip install -r requirements.txt --quiet
             sudo systemctl restart centralparking
             sudo systemctl restart parking-watchdog
