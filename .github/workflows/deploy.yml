@@ -19,8 +19,8 @@ jobs:
             cd /opt/services/centralparking/deploy/backend
             sudo -u fabian -H git -C /opt/services/centralparking/deploy/backend \
               pull --ff-only origin main
-            /opt/services/centralparking/centralparking-mvp/.venv/bin/pip \
-              install -r requirements.txt --quiet
+            /opt/services/centralparking/centralparking-mvp/.venv/bin/python \
+              -m pip install -r requirements.txt --quiet
             sudo systemctl restart centralparking
             sudo systemctl restart parking-watchdog
             sleep 3
