@@ -484,7 +484,11 @@ def get_detection_events(
 def _stay_from_row(row: dict) -> dict:
     entry_time = row["entry_time"]
     exit_time = row["exit_time"]
-    if entry_time and exit_time:
+    technical_close = row["session_status"] == "AUTO_CLOSED"
+    if technical_close:
+        status = "NEEDS_REVIEW"
+        duration = None
+    elif entry_time and exit_time:
         status = "COMPLETED"
         duration = max(
             0, int((exit_time - entry_time).total_seconds() // 60)
@@ -539,13 +543,19 @@ def get_parking_stays(
     conditions = ["status != 'VOID'"]
     params: list = []
     if status == "COMPLETED":
-        conditions.extend(["entry_time IS NOT NULL", "exit_time IS NOT NULL"])
+        conditions.extend([
+            "entry_time IS NOT NULL",
+            "exit_time IS NOT NULL",
+            "status != 'AUTO_CLOSED'",
+        ])
     elif status == "ENTRY_ONLY":
         conditions.extend(["entry_time IS NOT NULL", "exit_time IS NULL"])
     elif status == "EXIT_ONLY":
         conditions.extend(["entry_time IS NULL", "exit_time IS NOT NULL"])
     elif status == "NEEDS_REVIEW":
-        conditions.append("(entry_time IS NULL OR exit_time IS NULL)")
+        conditions.append(
+            "(entry_time IS NULL OR exit_time IS NULL OR status = 'AUTO_CLOSED')"
+        )
     if date:
         conditions.append(
             "(COALESCE(exit_time, entry_time) AT TIME ZONE "
@@ -561,7 +571,8 @@ def get_parking_stays(
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
-                SELECT id, plate, entry_time, exit_time, entry_image_path,
+                SELECT id, plate, entry_time, exit_time, status session_status,
+                       entry_image_path,
                        exit_image_path, fee, entry_detection_id,
                        exit_detection_id, match_type, match_confidence
                 FROM parking_sessions
@@ -577,7 +588,8 @@ def get_parking_stay(stay_id: int) -> dict:
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, plate, entry_time, exit_time, entry_image_path,
+                SELECT id, plate, entry_time, exit_time, status session_status,
+                       entry_image_path,
                        exit_image_path, fee, entry_detection_id,
                        exit_detection_id, match_type, match_confidence
                 FROM parking_sessions

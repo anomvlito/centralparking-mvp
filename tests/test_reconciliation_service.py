@@ -1,11 +1,37 @@
+import datetime
 import unittest
 from unittest.mock import patch
 
 from api.schemas.reconciliation import ReconcileStayRequest
+from api.database import _stay_from_row
 from api.services import reconciliation
 
 
 class ReconciliationServiceTests(unittest.TestCase):
+    def test_technical_close_is_not_reported_as_twenty_hour_stay(self):
+        entry = datetime.datetime(
+            2026, 7, 23, 10, 0, tzinfo=datetime.timezone.utc
+        )
+        row = {
+            "id": 9,
+            "plate": "TEST12",
+            "entry_time": entry,
+            "exit_time": entry + datetime.timedelta(hours=20),
+            "session_status": "AUTO_CLOSED",
+            "entry_detection_id": None,
+            "exit_detection_id": None,
+            "match_type": "UNRESOLVED",
+            "match_confidence": None,
+            "entry_image_path": None,
+            "exit_image_path": None,
+            "fee": 0,
+        }
+
+        stay = _stay_from_row(row)
+
+        self.assertEqual(stay["status"], "NEEDS_REVIEW")
+        self.assertIsNone(stay["duration_minutes"])
+
     @patch.object(reconciliation, "get_parking_stays")
     def test_completed_stays_are_delegated_without_using_cars(self, get_stays):
         get_stays.return_value = [{"stay_id": 7, "duration_minutes": 42}]
