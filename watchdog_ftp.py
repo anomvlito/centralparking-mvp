@@ -14,6 +14,7 @@ import time
 import shutil
 import datetime
 import logging
+import threading
 import requests
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,20 @@ FTP_WATCH_DIR  = os.environ.get("FTP_WATCH_DIR",   "/ftp/entrada")
 FTP_ARCHIVE_DIR = os.environ.get("FTP_ARCHIVE_DIR", "/ftp/historico")
 FTP_REVIEW_DIR  = os.environ.get("FTP_REVIEW_DIR",  "/ftp/revisar")
 API_BASE        = os.environ.get("API_BASE",         "http://localhost:8000")
+
+# on_created de watchdog solo ve eventos en vivo: un archivo que llega
+# mientras el proceso no corre (crash-loop, deploy, reboot) se pierde para
+# siempre si nadie lo barre al reiniciar. FTP_SWEEP_MAX_AGE_SECONDS acota
+# ese barrido a lo reciente para no reprocesar meses de backlog viejo cada
+# vez que el servicio reinicia.
+FTP_SWEEP_MAX_AGE = int(os.environ.get("FTP_SWEEP_MAX_AGE_SECONDS", "7200"))
+
+# El backend corre como usuario sin permiso de escritura sobre
+# FTP_WATCH_DIR (es del usuario FTP), así que no puede borrar el .mp4
+# fuente una vez procesado. El watchdog sí puede (corre como root):
+# espera a que aparezca el CSV de resultados y recién ahí lo borra.
+VIDEO_CLEANUP_POLL_SECONDS   = int(os.environ.get("VIDEO_CLEANUP_POLL_SECONDS", "5"))
+VIDEO_CLEANUP_TIMEOUT_SECONDS = int(os.environ.get("VIDEO_CLEANUP_TIMEOUT_SECONDS", "1800"))
 
 FILE_SETTLE_SECONDS = 2
 FILE_SETTLE_TIMEOUT = 15
@@ -180,10 +195,76 @@ class ReoLinkFTPHandler(FileSystemEventHandler):
             data = res.json()
             if "error" in data:
                 log.error(f"ERROR vid: {data['error']}")
-            else:
-                log.info(f"VID   queued: {data.get('status')}")
+                return
+
+            log.info(f"VID   queued: {data.get('status')}")
+            result_csv = data.get("result_csv")
+            if result_csv:
+                threading.Thread(
+                    target=self._cleanup_video_after_processing,
+                    args=(path, result_csv),
+                    daemon=True,
+                ).start()
         except Exception as e:
             log.error(f"Error enviando video: {e}")
+
+    def _cleanup_video_after_processing(self, video_path: str, result_csv_path: str):
+        """Espera a que el backend termine de procesar el video (aparece
+        result_csv_path) y recién ahí borra el .mp4 fuente. Si el backend
+        nunca llega a escribir el CSV (video corrupto, AI offline), se deja
+        el archivo donde está tras el timeout en vez de perderlo."""
+        waited = 0
+        while waited < VIDEO_CLEANUP_TIMEOUT_SECONDS:
+            if os.path.exists(result_csv_path):
+                _discard(video_path)
+                log.info(f"VID   limpiado: {os.path.basename(video_path)}")
+                return
+            if not os.path.exists(video_path):
+                return
+            time.sleep(VIDEO_CLEANUP_POLL_SECONDS)
+            waited += VIDEO_CLEANUP_POLL_SECONDS
+        log.warning(f"VID   timeout esperando resultado de {os.path.basename(video_path)}, no se borra")
+
+
+# ─────────────────────────── Reconciliacion al arrancar ─────────────────────
+
+def _sweep_existing(handler: "ReoLinkFTPHandler"):
+    """Procesa imagenes que ya estaban en FTP_WATCH_DIR al arrancar, dentro
+    de la ventana FTP_SWEEP_MAX_AGE. Cubre lo que se haya perdido durante
+    cortes recientes del watchdog sin tocar backlog antiguo.
+
+    Solo imagenes: /api/ftp/video encola _process_video_task como
+    BackgroundTask sincrono sin ningun limite de concurrencia. Mandar
+    muchos videos de golpe (ej. el backlog acumulado tras un corte) ya
+    causo un OOM-kill del backend (2026-07-20 18:52 UTC, memoria a 5.7G).
+    _handle_video ya limpia el .mp4 fuente cuando corresponde (ver
+    _cleanup_video_after_processing), pero eso no evita el pico de
+    memoria si se disparan muchos en paralelo — por eso los videos igual
+    se excluyen del barrido hasta que haya un límite de concurrencia.
+    """
+    now = time.time()
+    pending = []
+    for root, _dirs, files in os.walk(FTP_WATCH_DIR):
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in IMAGE_EXTS:
+                continue
+            path = os.path.join(root, fname)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if now - mtime <= FTP_SWEEP_MAX_AGE:
+                pending.append((mtime, path, ext))
+
+    if not pending:
+        return
+
+    pending.sort()
+    log.info(f"Barrido inicial: {len(pending)} archivo(s) de los ultimos {FTP_SWEEP_MAX_AGE}s pendientes")
+    for _mtime, path, _ext in pending:
+        if os.path.exists(path):
+            handler._handle_image(path)
 
 
 # ─────────────────────────── Main ───────────────────────────────────────────
@@ -198,6 +279,7 @@ def main():
     observer = Observer()
     observer.schedule(handler, FTP_WATCH_DIR, recursive=True)
     observer.start()
+    _sweep_existing(handler)
 
     log.info(f"Monitoreando:  {FTP_WATCH_DIR}")
     log.info(f"Archivando en: {FTP_ARCHIVE_DIR}")

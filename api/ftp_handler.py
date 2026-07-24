@@ -15,6 +15,7 @@ import os
 import re
 import csv
 import json
+import threading
 import numpy as np
 import cv2
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
@@ -34,6 +35,16 @@ router = APIRouter()
 
 FTP_EVENTS_FILE  = "ftp_events.json"
 FTP_ARCHIVE_DIR  = os.environ.get("FTP_ARCHIVE_DIR", "/ftp/historico")
+
+# Cada video decodificado + corrido por multi-strategy ALPR consume ~1-2GB
+# de RAM mientras procesa. BackgroundTasks corre estas funciones sync en un
+# threadpool sin ningún límite propio, así que N videos llegando juntos
+# (backlog reencolado, o varios autos seguidos) compiten por memoria en
+# paralelo — esto ya tumbó el backend por OOM-kill dos veces en producción
+# (2026-07-20, ~18:52 y ~21:58 UTC). El semáforo los serializa: en vez de
+# competir, esperan su turno sin consumir memoria mientras esperan.
+_MAX_CONCURRENT_VIDEOS = int(os.environ.get("MAX_CONCURRENT_VIDEO_PROCESSING", "1"))
+_video_semaphore = threading.Semaphore(_MAX_CONCURRENT_VIDEOS)
 FTP_REVIEW_DIR   = os.environ.get("FTP_REVIEW_DIR",  "/ftp/revisar")
 
 
@@ -157,7 +168,17 @@ def _process_ftp_video_and_register(video_path: str, result_csv_path: str):
     # auto_register=False: el registro lo hace acá _handle_auto_detection,
     # pasando el frame confirmado para que compita por calidad en staging
     # igual que las fotos (antes se descartaba y el video nunca aportaba imagen).
-    _process_video_task(video_path, result_csv_path, auto_register=False)
+    #
+    # No se borra video_path acá: este proceso corre como el usuario del
+    # backend, sin permiso de escritura sobre /ftp/entrada (es del usuario
+    # FTP). La limpieza del .mp4 fuente la hace watchdog_ftp.py (corre como
+    # root), que espera a que result_csv_path exista y recién ahí lo borra.
+    #
+    # El semáforo serializa el procesamiento pesado (ver definición arriba):
+    # mientras un video espera turno acá no consume la memoria del decode +
+    # multi-strategy ALPR, solo la ocupa el que está realmente corriendo.
+    with _video_semaphore:
+        _process_video_task(video_path, result_csv_path, auto_register=False)
 
     if not os.path.exists(result_csv_path):
         print(f"ftp_video: no CSV at {result_csv_path}")

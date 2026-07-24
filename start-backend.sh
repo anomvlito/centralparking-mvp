@@ -3,7 +3,7 @@
 
 set -e
 
-REPO_DIR="/opt/services/centralparking-mvp"
+REPO_DIR="/opt/services/centralparking/centralparking-mvp"
 cd "$REPO_DIR"
 
 # Load environment
