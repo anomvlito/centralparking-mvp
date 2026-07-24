@@ -422,6 +422,8 @@ app.include_router(direction_router)
 from .routers.detection import router as detection_router
 from .routers.history import router as history_router
 from .routers.parking import router as parking_router
+from .routers.reconciliation import router as reconciliation_router
 app.include_router(detection_router)
 app.include_router(history_router)
 app.include_router(parking_router)
+app.include_router(reconciliation_router)

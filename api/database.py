@@ -59,6 +59,31 @@ def init_db():
                 ALTER TABLE detection_log
                 ADD COLUMN IF NOT EXISTS image_path VARCHAR(255)
             """)
+            cur.execute("""
+                ALTER TABLE detection_log
+                ADD COLUMN IF NOT EXISTS normalized_plate VARCHAR(20)
+            """)
+            cur.execute("""
+                ALTER TABLE detection_log
+                ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN'
+            """)
+            cur.execute("""
+                ALTER TABLE detection_log
+                ADD COLUMN IF NOT EXISTS match_status VARCHAR(20) NOT NULL DEFAULT 'UNMATCHED'
+            """)
+            cur.execute("""
+                ALTER TABLE detection_log
+                ADD COLUMN IF NOT EXISTS linked_session_id BIGINT REFERENCES parking_sessions(id)
+            """)
+            cur.execute("""
+                ALTER TABLE detection_log
+                ADD COLUMN IF NOT EXISTS source VARCHAR(40)
+            """)
+            cur.execute("""
+                UPDATE detection_log
+                SET normalized_plate = regexp_replace(upper(plate), '[^A-Z0-9]', '', 'g')
+                WHERE normalized_plate IS NULL
+            """)
             # Buffer de staging: deduplicación + quality scoring de detecciones
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS staging_detections (
@@ -109,6 +134,22 @@ def init_db():
                 ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id)
             """)
             cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS entry_detection_id BIGINT REFERENCES detection_log(id)
+            """)
+            cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS exit_detection_id BIGINT REFERENCES detection_log(id)
+            """)
+            cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS match_type VARCHAR(20) NOT NULL DEFAULT 'UNRESOLVED'
+            """)
+            cur.execute("""
+                ALTER TABLE parking_sessions
+                ADD COLUMN IF NOT EXISTS match_confidence NUMERIC(5,4)
+            """)
+            cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_detection_log_plate
                 ON detection_log(plate)
             """)
@@ -119,6 +160,20 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_detection_log_action
                 ON detection_log(action)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_detection_log_match_status
+                ON detection_log(match_status, logged_at DESC)
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_parking_sessions_entry_detection
+                ON parking_sessions(entry_detection_id)
+                WHERE entry_detection_id IS NOT NULL AND status != 'VOID'
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_parking_sessions_exit_detection
+                ON parking_sessions(exit_detection_id)
+                WHERE exit_detection_id IS NOT NULL AND status != 'VOID'
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_staging_detections_plate_status
@@ -338,13 +393,302 @@ def get_direction_audit_metrics(date: str = None, limit: int = 5000) -> dict:
 # ─────────────────────── log / historial ────────────────────────────────────
 
 def log_to_db(plate: str, action: str, status: str = "REAL",
-              fee: float = 0, conf: float = 1.0, image_path: str = None):
+              fee: float = 0, conf: float = 1.0, image_path: str = None,
+              direction: str = "UNKNOWN", source: str = None):
+    normalized = re.sub(r"[^A-Z0-9]", "", plate.upper())
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO detection_log (plate, action, status, fee, confidence, image_path)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (plate, action, status, fee, conf, image_path))
+                INSERT INTO detection_log
+                    (plate, normalized_plate, action, status, fee, confidence,
+                     image_path, direction, match_status, source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'UNMATCHED', %s)
+                RETURNING id
+            """, (plate, normalized, action, status, fee, conf, image_path,
+                  direction, source or status))
+            row = cur.fetchone()
+    return int(row["id"])
+
+
+_DETECTION_MATCH_STATUSES = {
+    "UNMATCHED", "MATCHED_ENTRY", "MATCHED_EXIT", "DISMISSED"
+}
+
+
+def _image_url(image_path: str | None) -> str | None:
+    if not image_path:
+        return None
+    backend_url = os.environ.get(
+        "BACKEND_URL", "https://2.24.69.49.nip.io"
+    ).rstrip("/")
+    return f"{backend_url}/api/monitor/file/{image_path}"
+
+
+def get_detection_events(
+    limit: int = 100,
+    match_status: str | None = None,
+    date: str | None = None,
+) -> list:
+    bounded_limit = max(1, min(limit, 500))
+    if match_status and match_status not in _DETECTION_MATCH_STATUSES:
+        raise ValueError("Estado de conciliación inválido")
+
+    conditions = [
+        "action IN ('DETECTED', 'DETECTION')",
+        "image_path IS NOT NULL",
+    ]
+    params: list = []
+    if match_status:
+        conditions.append("match_status = %s")
+        params.append(match_status)
+    if date:
+        conditions.append(
+            "(logged_at AT TIME ZONE 'America/Santiago')::date = %s::date"
+        )
+        params.append(date)
+    params.append(bounded_limit)
+
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT id, plate, COALESCE(normalized_plate, plate) normalized_plate,
+                       logged_at, confidence, image_path, direction, match_status,
+                       linked_session_id, COALESCE(source, status) source
+                FROM detection_log
+                WHERE {' AND '.join(conditions)}
+                ORDER BY logged_at DESC
+                LIMIT %s
+            """, params)
+            rows = cur.fetchall()
+
+    return [
+        {
+            "detection_id": int(row["id"]),
+            "detected_plate": row["plate"],
+            "normalized_plate": row["normalized_plate"],
+            "detected_at": row["logged_at"].astimezone(_CL).isoformat(),
+            "confidence": float(row["confidence"]),
+            "image_url": _image_url(row["image_path"]),
+            "direction": row["direction"] or "UNKNOWN",
+            "match_status": row["match_status"],
+            "stay_id": (
+                int(row["linked_session_id"])
+                if row["linked_session_id"] is not None else None
+            ),
+            "source": row["source"],
+        }
+        for row in rows
+    ]
+
+
+def _stay_from_row(row: dict) -> dict:
+    entry_time = row["entry_time"]
+    exit_time = row["exit_time"]
+    if entry_time and exit_time:
+        status = "COMPLETED"
+        duration = max(
+            0, int((exit_time - entry_time).total_seconds() // 60)
+        )
+    elif entry_time:
+        status = "ENTRY_ONLY"
+        duration = None
+    elif exit_time:
+        status = "EXIT_ONLY"
+        duration = None
+    else:
+        status = "NEEDS_REVIEW"
+        duration = None
+    return {
+        "stay_id": int(row["id"]),
+        "resolved_plate": row["plate"],
+        "entry_detection_id": (
+            int(row["entry_detection_id"])
+            if row["entry_detection_id"] is not None else None
+        ),
+        "exit_detection_id": (
+            int(row["exit_detection_id"])
+            if row["exit_detection_id"] is not None else None
+        ),
+        "entry_time": entry_time.astimezone(_CL).isoformat() if entry_time else None,
+        "exit_time": exit_time.astimezone(_CL).isoformat() if exit_time else None,
+        "duration_minutes": duration,
+        "match_type": row["match_type"] or "UNRESOLVED",
+        "match_confidence": (
+            float(row["match_confidence"])
+            if row["match_confidence"] is not None else None
+        ),
+        "status": status,
+        "entry_image_url": _image_url(row["entry_image_path"]),
+        "exit_image_url": _image_url(row["exit_image_path"]),
+        "fee": float(row["fee"] or 0),
+    }
+
+
+def get_parking_stays(
+    limit: int = 100,
+    status: str | None = None,
+    date: str | None = None,
+    plate: str | None = None,
+) -> list:
+    allowed_statuses = {
+        "ENTRY_ONLY", "EXIT_ONLY", "COMPLETED", "NEEDS_REVIEW"
+    }
+    if status and status not in allowed_statuses:
+        raise ValueError("Estado de estadía inválido")
+    bounded_limit = max(1, min(limit, 500))
+    conditions = ["status != 'VOID'"]
+    params: list = []
+    if status == "COMPLETED":
+        conditions.extend(["entry_time IS NOT NULL", "exit_time IS NOT NULL"])
+    elif status == "ENTRY_ONLY":
+        conditions.extend(["entry_time IS NOT NULL", "exit_time IS NULL"])
+    elif status == "EXIT_ONLY":
+        conditions.extend(["entry_time IS NULL", "exit_time IS NOT NULL"])
+    elif status == "NEEDS_REVIEW":
+        conditions.append("(entry_time IS NULL OR exit_time IS NULL)")
+    if date:
+        conditions.append(
+            "(COALESCE(exit_time, entry_time) AT TIME ZONE "
+            "'America/Santiago')::date = %s::date"
+        )
+        params.append(date)
+    if plate:
+        normalized = re.sub(r"[^A-Z0-9]", "", plate.upper())
+        conditions.append("plate = %s")
+        params.append(normalized)
+    params.append(bounded_limit)
+
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT id, plate, entry_time, exit_time, entry_image_path,
+                       exit_image_path, fee, entry_detection_id,
+                       exit_detection_id, match_type, match_confidence
+                FROM parking_sessions
+                WHERE {' AND '.join(conditions)}
+                ORDER BY COALESCE(exit_time, entry_time) DESC
+                LIMIT %s
+            """, params)
+            rows = cur.fetchall()
+    return [_stay_from_row(row) for row in rows]
+
+
+def get_parking_stay(stay_id: int) -> dict:
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, plate, entry_time, exit_time, entry_image_path,
+                       exit_image_path, fee, entry_detection_id,
+                       exit_detection_id, match_type, match_confidence
+                FROM parking_sessions
+                WHERE id = %s AND status != 'VOID'
+            """, (stay_id,))
+            row = cur.fetchone()
+    if not row:
+        raise LookupError("Estadía no encontrada")
+    return _stay_from_row(row)
+
+
+def reconcile_detection_events(
+    entry_detection_id: int,
+    exit_detection_id: int,
+    resolved_plate: str,
+) -> dict:
+    if entry_detection_id == exit_detection_id:
+        raise ValueError("Entrada y salida deben ser detecciones distintas")
+    normalized = re.sub(r"[^A-Z0-9]", "", resolved_plate.upper())
+    if not normalized:
+        raise ValueError("La patente resuelta es obligatoria")
+
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, plate, logged_at, confidence, image_path, match_status
+                FROM detection_log
+                WHERE id IN (%s, %s)
+                ORDER BY id
+                FOR UPDATE
+            """, (entry_detection_id, exit_detection_id))
+            found = {int(row["id"]): row for row in cur.fetchall()}
+            if set(found) != {entry_detection_id, exit_detection_id}:
+                raise LookupError("Una o más detecciones no existen")
+            entry = found[entry_detection_id]
+            exit_event = found[exit_detection_id]
+            if entry["match_status"] != "UNMATCHED" or exit_event["match_status"] != "UNMATCHED":
+                raise ValueError("Una o más detecciones ya fueron conciliadas")
+            if exit_event["logged_at"] <= entry["logged_at"]:
+                raise ValueError("La salida debe ser posterior a la entrada")
+
+            cur.execute(
+                "INSERT INTO vehicles (plate) VALUES (%s) ON CONFLICT (plate) DO NOTHING",
+                (normalized,),
+            )
+            confidence = min(
+                float(entry["confidence"]), float(exit_event["confidence"])
+            )
+            cur.execute("""
+                INSERT INTO parking_sessions
+                    (plate, entry_time, exit_time, is_event, event_fee, fee,
+                     entry_image_path, exit_image_path, source, status,
+                     entry_detection_id, exit_detection_id, match_type,
+                     match_confidence)
+                VALUES (%s, %s, %s, false, NULL, 0, %s, %s,
+                        'manual_reconciliation', 'REAL', %s, %s, 'MANUAL', %s)
+                RETURNING id
+            """, (
+                normalized, entry["logged_at"], exit_event["logged_at"],
+                entry["image_path"], exit_event["image_path"],
+                entry_detection_id, exit_detection_id, confidence,
+            ))
+            stay_id = int(cur.fetchone()["id"])
+            cur.execute("""
+                UPDATE detection_log
+                SET match_status = CASE
+                        WHEN id = %s THEN 'MATCHED_ENTRY'
+                        ELSE 'MATCHED_EXIT'
+                    END,
+                    linked_session_id = %s
+                WHERE id IN (%s, %s)
+            """, (
+                entry_detection_id, stay_id,
+                entry_detection_id, exit_detection_id,
+            ))
+            cur.execute("""
+                INSERT INTO audit_log (plate, event_type, details)
+                VALUES (%s, 'DETECTIONS_RECONCILED', %s::jsonb)
+            """, (
+                normalized,
+                json.dumps({
+                    "stay_id": stay_id,
+                    "entry_detection_id": entry_detection_id,
+                    "exit_detection_id": exit_detection_id,
+                    "match_type": "MANUAL",
+                }),
+            ))
+
+    return get_parking_stay(stay_id)
+
+
+def dismiss_detection_event(detection_id: int) -> dict:
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE detection_log
+                SET match_status = 'DISMISSED'
+                WHERE id = %s AND match_status = 'UNMATCHED'
+                RETURNING id
+            """, (detection_id,))
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "SELECT match_status FROM detection_log WHERE id = %s",
+                    (detection_id,),
+                )
+                existing = cur.fetchone()
+                if not existing:
+                    raise LookupError("Detección no encontrada")
+                raise ValueError("La detección ya fue conciliada o descartada")
+    return {"detection_id": detection_id, "match_status": "DISMISSED"}
 
 
 def get_history(limit: int = 200, date: str = None) -> list:

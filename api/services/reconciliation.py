@@ -1,0 +1,31 @@
+from api.database import (
+    dismiss_detection_event,
+    get_detection_events,
+    get_parking_stays,
+    reconcile_detection_events,
+)
+from api.schemas.reconciliation import ReconcileStayRequest
+
+
+def list_detections(limit=100, match_status=None, date=None):
+    return get_detection_events(
+        limit=limit, match_status=match_status, date=date
+    )
+
+
+def list_stays(limit=100, status=None, date=None, plate=None):
+    return get_parking_stays(
+        limit=limit, status=status, date=date, plate=plate
+    )
+
+
+def reconcile_stay(request: ReconcileStayRequest):
+    return reconcile_detection_events(
+        entry_detection_id=request.entry_detection_id,
+        exit_detection_id=request.exit_detection_id,
+        resolved_plate=request.resolved_plate,
+    )
+
+
+def dismiss_detection(detection_id: int):
+    return dismiss_detection_event(detection_id)
