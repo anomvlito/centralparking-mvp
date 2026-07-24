@@ -1,6 +1,6 @@
 # Feature — Clasificación de entrada y salida por trayectoria vertical
 
-**Etapa Project 4:** `In progress`  
+**Etapa Project 4:** `In review`  
 **HUs relacionadas:** [HU-007](../../historias-usuario/administrador/HU-007-clasificar-direccion-trayectoria-vertical.md), [HU-008](../../historias-usuario/administrador/HU-008-configurar-parametros-clasificador-vertical.md), [HU-009](../../historias-usuario/auditor/HU-009-observar-decisiones-clasificador-vertical.md)  
 **ADRs:** [ADR-001](../../decisiones/ADR-001-reactivar-direction-tracker-acotado.md), [ADR-003](../../decisiones/ADR-003-clasificacion-direccion-trayectoria-vertical.md)  
 **Issues:** [#25](https://github.com/anomvlito/centralparking-mvp/issues/25), [#26](https://github.com/anomvlito/centralparking-mvp/issues/26), [#27](https://github.com/anomvlito/centralparking-mvp/issues/27)

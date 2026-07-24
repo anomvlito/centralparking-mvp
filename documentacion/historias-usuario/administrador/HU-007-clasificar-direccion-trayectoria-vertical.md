@@ -1,10 +1,10 @@
 # HU-007 — Clasificar entrada y salida por trayectoria vertical
 
 **Actor:** `administrador`  
-**Estado:** `en-progreso`  
-**Feature relacionada:** [Clasificación de entrada y salida por trayectoria vertical](../../features/in-progress/clasificacion-vertical-entrada-salida.md)  
+**Estado:** `en-revision`
+**Feature relacionada:** [Clasificación de entrada y salida por trayectoria vertical](../../features/in-review/clasificacion-vertical-entrada-salida.md)
 **Issue:** [#25](https://github.com/anomvlito/centralparking-mvp/issues/25)  
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`  
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In review` / `In Progress`
 **Creado por:** Codex, a solicitud del usuario  
 **ADRs relacionadas:** [ADR-001](../../decisiones/ADR-001-reactivar-direction-tracker-acotado.md), [ADR-003](../../decisiones/ADR-003-clasificacion-direccion-trayectoria-vertical.md)  
 **HUs relacionadas:** [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md), [HU-006](./HU-006-modularizar-backend-sin-regresiones.md)
@@ -237,7 +237,12 @@ Se usarán secuencias sintéticas o anonimizadas. No se borrará evidencia.
 
 ## Evidencia de implementación
 
-- Commit/PR: pendiente.
-- Fixture de coordenadas: pendiente.
-- Calibración: pendiente.
-- Verificaciones: pendientes.
+- Commit: `e12c07b`.
+- PR: [#28](https://github.com/anomvlito/centralparking-mvp/pull/28).
+- Coordenadas: fixtures sintéticas normalizadas y estrategia geométrica
+  documentada en
+  [configuración del clasificador](../../guias/configuracion-clasificador-vertical.md).
+- Calibración productiva: pendiente; el default permanece deshabilitado y el
+  único modo habilitable de esta entrega es observación sin efectos.
+- Verificaciones: trayectoria creciente/decreciente, timestamps irregulares,
+  historia acotada, expiración y todos los motivos `UNKNOWN` principales.

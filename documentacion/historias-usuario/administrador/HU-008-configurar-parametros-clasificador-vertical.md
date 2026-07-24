@@ -1,10 +1,10 @@
 # HU-008 — Configurar y validar parámetros del clasificador vertical
 
 **Actor:** `administrador`  
-**Estado:** `en-progreso`  
-**Feature relacionada:** [Clasificación de entrada y salida por trayectoria vertical](../../features/in-progress/clasificacion-vertical-entrada-salida.md)  
+**Estado:** `en-revision`
+**Feature relacionada:** [Clasificación de entrada y salida por trayectoria vertical](../../features/in-review/clasificacion-vertical-entrada-salida.md)
 **Issue:** [#26](https://github.com/anomvlito/centralparking-mvp/issues/26)  
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`  
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In review` / `In Progress`
 **Creado por:** Codex, a solicitud del usuario  
 **ADR relacionada:** [ADR-003 — Clasificar dirección exclusivamente por trayectoria vertical](../../decisiones/ADR-003-clasificacion-direccion-trayectoria-vertical.md)  
 **HU base:** [HU-007 — Clasificar entrada y salida por trayectoria vertical](./HU-007-clasificar-direccion-trayectoria-vertical.md)
@@ -205,8 +205,13 @@ inspeccionan sin mostrar valores sensibles antes de migrar.
 
 ## Evidencia de implementación
 
-- Commit/PR: pendiente.
-- Inventario de configuración: pendiente.
-- Dataset de calibración: pendiente.
-- Valores efectivos aprobados: pendiente.
-- Verificaciones/rollback: pendientes.
+- Commit: `e12c07b`.
+- PR: [#28](https://github.com/anomvlito/centralparking-mvp/pull/28).
+- Inventario y rollback:
+  [configuración del clasificador](../../guias/configuracion-clasificador-vertical.md).
+- Dataset: secuencias sintéticas reproducibles en
+  `tests/test_direction_tracker.py`.
+- Valores efectivos productivos: pendientes de observación/calibración; no se
+  afirma que los defaults estén aprobados para efectos.
+- Verificaciones: validación de rangos, hash, variables obsoletas,
+  `enabled=false` y `observation_only`.

@@ -1,10 +1,10 @@
 # HU-006 — Modularizar el backend preservando sus contratos y comportamiento
 
 **Actor:** `administrador`  
-**Estado:** `en-progreso`  
-**Feature relacionada:** [Modularización segura del backend](../../features/in-progress/modularizacion-segura-backend.md)  
+**Estado:** `en-revision`
+**Feature relacionada:** [Modularización segura del backend](../../features/in-review/modularizacion-segura-backend.md)
 **Issue:** [#24](https://github.com/anomvlito/centralparking-mvp/issues/24)  
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`  
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In review` / `In Progress`
 **Creado por:** Codex, a solicitud del usuario  
 **ADR relacionada:** [ADR-002 — Arquitectura modular e incremental del backend](../../decisiones/ADR-002-arquitectura-modular-backend.md)
 
@@ -316,7 +316,10 @@ smoke, deploy controlado y rollback verificado.
 
 ## Evidencia de implementación
 
-- Commit/PR: pendiente.
-- OpenAPI base/final: pendiente.
-- Verificaciones: pendientes.
-- Deploy/rollback: pendientes.
+- Commit: `e12c07b`.
+- PR: [#28](https://github.com/anomvlito/centralparking-mvp/pull/28).
+- OpenAPI: prueba contractual de paths existentes, rutas adicionales y
+  `operationId` no duplicados en `tests/test_openapi_contract.py`.
+- Verificaciones: 24 pruebas unitarias/contractuales, `compileall` y
+  `git diff --check` correctos.
+- Deploy/rollback: pendientes de merge y smoke en VPS.

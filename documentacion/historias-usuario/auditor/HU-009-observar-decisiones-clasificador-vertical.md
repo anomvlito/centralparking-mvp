@@ -1,10 +1,10 @@
 # HU-009 — Observar y auditar decisiones del clasificador vertical
 
 **Actor:** `auditor`  
-**Estado:** `en-progreso`  
-**Feature relacionada:** [Clasificación de entrada y salida por trayectoria vertical](../../features/in-progress/clasificacion-vertical-entrada-salida.md)  
+**Estado:** `en-revision`
+**Feature relacionada:** [Clasificación de entrada y salida por trayectoria vertical](../../features/in-review/clasificacion-vertical-entrada-salida.md)
 **Issue:** [#27](https://github.com/anomvlito/centralparking-mvp/issues/27)  
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`  
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In review` / `In Progress`
 **Creado por:** Codex, a solicitud del usuario  
 **ADR relacionada:** [ADR-003 — Clasificar dirección exclusivamente por trayectoria vertical](../../decisiones/ADR-003-clasificacion-direccion-trayectoria-vertical.md)  
 **HUs base:** [HU-007](../administrador/HU-007-clasificar-direccion-trayectoria-vertical.md), [HU-008](../administrador/HU-008-configurar-parametros-clasificador-vertical.md)
@@ -248,9 +248,14 @@ El refinamiento debe acordar:
 
 ## Evidencia de implementación
 
-- Commit/PR: pendiente.
-- Modelo de eventos: pendiente.
-- Política de retención: pendiente.
-- Métricas base: pendientes.
-- Evaluación sombra: pendiente.
-- Aprobación/rollback: pendientes.
+- Commit: `e12c07b`.
+- PR: [#28](https://github.com/anomvlito/centralparking-mvp/pull/28).
+- Modelo: `DirectionEvaluation` y evento durable `DIRECTION_EVALUATED`.
+- Métricas: `GET /api/audit/direction/metrics`, agregadas sin patente como
+  dimensión; configuración en `GET /api/audit/direction/config`.
+- Política de retención: reutiliza `audit_log`; cualquier purga sigue
+  requiriendo autorización separada.
+- Evaluación sombra: implementada con `effect=none`; activación productiva
+  pendiente de merge, deploy y muestra observada.
+- Rollback:
+  [configuración del clasificador](../../guias/configuracion-clasificador-vertical.md).

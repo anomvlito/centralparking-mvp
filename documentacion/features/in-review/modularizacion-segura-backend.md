@@ -1,6 +1,6 @@
 # Feature — Modularización segura del backend
 
-**Etapa Project 4:** `In progress`  
+**Etapa Project 4:** `In review`  
 **HUs relacionadas:** [HU-006](../../historias-usuario/administrador/HU-006-modularizar-backend-sin-regresiones.md)  
 **ADR:** [ADR-002](../../decisiones/ADR-002-arquitectura-modular-backend.md)  
 **Issues:** [#24](https://github.com/anomvlito/centralparking-mvp/issues/24)
