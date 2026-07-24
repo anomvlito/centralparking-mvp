@@ -1,10 +1,10 @@
 # HU-005 — Consultar duración de estadías y revisar detecciones sin conciliar
 
 **Actor:** `administrador`
-**Estado:** `en-progreso`
-**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
+**Estado:** `implementada`
+**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/done/conciliacion-automatica-entradas-salidas.md)
 **Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Done` / `Done`
 **HU backend:** [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
 
 ## Historia
@@ -98,5 +98,9 @@ La UI debe mostrar incertidumbre y mantener revisión humana.
 
 ## Evidencia de implementación
 
-- Commit/PR: pendiente.
-- Preview/deploy y smoke: pendientes.
+- Frontend: commit `bfed715`, [PR #5](https://github.com/anomvlito/adyac-camaras-frontend/pull/5),
+  merge `08b56d97bc6d758870f2cbc4ad0d723768f47f12`.
+- Verificación: 11 pruebas Vitest, TypeScript y build correctos; lint sin
+  errores y con tres advertencias no bloqueantes de imágenes.
+- Vercel: deployment `Production` exitoso para el merge.
+- Smoke: URL de producción del deployment responde HTTP 200.

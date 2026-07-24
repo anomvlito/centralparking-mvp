@@ -1,10 +1,10 @@
 # HU-004 — Conciliar detecciones particulares en estadías
 
 **Actor:** `administrador`
-**Estado:** `en-progreso`
-**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
+**Estado:** `implementada`
+**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/done/conciliacion-automatica-entradas-salidas.md)
 **Issue:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22)
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Done` / `Done`
 **ADR relacionada:** [ADR-001](../../decisiones/ADR-001-reactivar-direction-tracker-acotado.md)
 
 ## Historia
@@ -153,5 +153,11 @@ La conciliación usa transacción y locks; las pruebas usan patentes sintéticas
 
 ## Evidencia de implementación
 
-- Commit/PR: pendiente.
-- Deploy y smoke: pendientes.
+- Backend: commit `f87d832`, [PR #34](https://github.com/anomvlito/centralparking-mvp/pull/34),
+  merge `5052b106125ce5f24bb57a143ff6d4813f758648`.
+- Verificación: 28 pruebas, `compileall`, `git diff --check` y contrato
+  OpenAPI correctos.
+- Deploy VPS: [run 30069920707](https://github.com/anomvlito/centralparking-mvp/actions/runs/30069920707)
+  correcto.
+- Smoke: `centralparking.service` y `parking-watchdog.service` activos,
+  `/docs` HTTP 200, `/api/stays` y `/api/detections` con shapes contractuales.
