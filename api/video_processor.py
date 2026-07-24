@@ -9,6 +9,7 @@ import shutil
 
 # Importing from the existing detecting module
 from api.detect import alpr, HAS_ML, extract_best_plate, strategy_clahe
+from api.services.direction import direction_service
 
 router = APIRouter()
 
@@ -60,7 +61,11 @@ def _process_video_task(video_path: str, result_csv_path: str, auto_register: bo
     # Acá se agrupan por distancia de edición (mismo criterio que
     # database.find_similar_active_session) y solo se emite un representante
     # por cluster: la lectura de mayor confianza.
-    clusters: List[dict] = []  # [{"plate", "confidence", "frame"}]
+    clusters: List[dict] = []  # [{"plate", "confidence", "frame", "samples"}]
+    # "samples": lista de (video_seconds, center_y, geometry_strategy) por
+    # frame que aportó geometría, en el orden real del video — alimenta al
+    # clasificador direccional (HU-010) agrupado por cluster (mismo criterio
+    # anti-fragmentación de OCR de arriba), no por texto crudo de cada frame.
 
     # Motion detection background subtractor (Tier 2 filtering)
     back_sub = cv2.createBackgroundSubtractorMOG2(history=50, varThreshold=50, detectShadows=False)
@@ -95,6 +100,12 @@ def _process_video_task(video_path: str, result_csv_path: str, auto_register: bo
 
             plate_text = candidate["plate"]
             confidence = candidate["confidence"]
+            center_y = candidate.get("center_y")
+            geometry_strategy = candidate.get("position_strategy") or candidate.get("strategy")
+            sample = None
+            if center_y is not None:
+                video_seconds = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                sample = (video_seconds, center_y, geometry_strategy)
 
             best_cluster = None
             best_dist = VIDEO_CLUSTER_MAX_DISTANCE + 1
@@ -104,18 +115,60 @@ def _process_video_task(video_path: str, result_csv_path: str, auto_register: bo
                     best_cluster, best_dist = cluster, dist
 
             if best_cluster is None:
-                clusters.append({"plate": plate_text, "confidence": confidence, "frame": frame.copy()})
+                clusters.append({
+                    "plate": plate_text, "confidence": confidence, "frame": frame.copy(),
+                    "samples": [sample] if sample else [],
+                })
                 print(f"video candidate: {plate_text} conf={confidence:.2f} (cluster nuevo)")
-            elif confidence > best_cluster["confidence"]:
-                best_cluster["plate"] = plate_text
-                best_cluster["confidence"] = confidence
-                best_cluster["frame"] = frame.copy()
+            else:
+                if confidence > best_cluster["confidence"]:
+                    best_cluster["plate"] = plate_text
+                    best_cluster["confidence"] = confidence
+                    best_cluster["frame"] = frame.copy()
+                if sample:
+                    best_cluster["samples"].append(sample)
 
         except Exception as e:
             print(f"Error processing frame {frame_count}: {e}")
 
     cap.release()
     print(f"video done: {len(clusters)} vehículo(s) detectado(s) (de {frame_count} frames)")
+
+    # HU-010: alimentar el clasificador direccional con la trayectoria real
+    # de cada cluster, usando la patente final resuelta (no el texto crudo
+    # de cada frame, que varía por ruido OCR). Se registra cada muestra
+    # intermedia sin auditar (tracker.record) y solo la última dispara
+    # observe(), que sí audita — un evento por vehículo, no uno por frame,
+    # tal como pide HU-009 ("evitar registrar cada frame sin control").
+    #
+    # Limitación conocida (no resuelta acá, ver HU-010 "riesgos"): estas
+    # muestras usan como tiempo la posición dentro del video
+    # (CAP_PROP_POS_MSEC, refleja la velocidad real del vehículo en la
+    # grabación), mientras que el flujo de fotos usa time.monotonic() del
+    # proceso al momento de la detección. Son bases de tiempo distintas: si
+    # la MISMA patente tuviera muestras de foto y de video dentro de la
+    # misma ventana real, no se combinan (la resta de tiempos da negativa y
+    # el filtro de ventana las descarta como incompatibles) — cada fuente
+    # arma su propia trayectoria de forma aislada mutable, correcta en sí
+    # misma, pero no fusionada entre fuentes. No se intenta reconciliar
+    # ambas bases en esta HU sin datos reales para validar el resultado.
+    if direction_service.settings.enabled:
+        for cluster in clusters:
+            samples = cluster["samples"]
+            if not samples:
+                continue
+            plate_text = cluster["plate"]
+            for video_seconds, center_y, geometry_strategy in samples[:-1]:
+                direction_service.tracker.record(
+                    plate_text, center_y, video_seconds,
+                    geometry_strategy=geometry_strategy,
+                )
+            last_seconds, last_y, last_geometry = samples[-1]
+            direction_service.observe(
+                plate=plate_text, center_y=last_y, timestamp=last_seconds,
+                geometry_strategy=last_geometry, source="video",
+                ocr_confidence=cluster["confidence"],
+            )
 
     detected_plates_history = []  # One row per cluster (vehículo real)
     for cluster in clusters:

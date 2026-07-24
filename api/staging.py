@@ -31,6 +31,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from api.database import _db, now_cl, log_to_db, get_sightings
+from api.services.direction import direction_service
 
 _CL = ZoneInfo("America/Santiago")
 
@@ -228,9 +229,20 @@ def staging_promote_expired():
                     (row["id"],)
                 )
 
+                # direction_service acumula una evaluación por patente en
+                # memoria (misma clave usada al observar en
+                # _handle_auto_detection); se consulta la última conocida en
+                # vez de recalcular, ya que la ventana temporal del
+                # clasificador (segundos) es independiente del TTL de
+                # staging (minutos). Con DIRECTION_ENABLED=false o sin
+                # evaluación previa, cae al mismo default 'UNKNOWN' de hoy.
+                evaluation = direction_service.tracker.latest(plate)
+                direction = evaluation.direction if evaluation else "UNKNOWN"
+
                 log_to_db(plate, "DETECTED", status="STAGING_AUTO",
                           conf=float(row["combined_score"]),
-                          image_path=row["image_path"])
+                          image_path=row["image_path"],
+                          direction=direction)
                 _audit(plate, "DETECTED",
                        {"combined_score": float(row["combined_score"]),
                         "strategy": row["strategy"]})
