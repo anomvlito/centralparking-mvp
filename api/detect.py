@@ -14,108 +14,20 @@ Estrategias de detección (en orden de prioridad):
   5. Cropped Center     - recorte del 60% central (útil cuando el viewfinder no está bien centrado)
 """
 
-import asyncio
 import os
 import datetime
-import random
 import statistics
 import cv2
 import numpy as np
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Optional, List
+from fastapi import FastAPI
+from typing import Optional
 
-_API_KEY = os.environ.get("API_KEY", "")
-
-from api.database import (
-    init_db, load_db, upsert_vehicle, remove_vehicle, void_vehicle, vehicle_exists,
-    log_to_db as log_to_csv, get_history, get_stats_today, clear_history, now_cl,
-    correct_session_plate, review_session,
-)
-from api.auth import require_admin
-
-
-_JWT_SECRET = os.environ.get("JWT_SECRET", "changeme-set-JWT_SECRET-in-env")
-
-# Rutas que no requieren JWT
-_PUBLIC_PATHS = {"/auth/login", "/docs", "/openapi.json", "/redoc"}
-_PUBLIC_PATH_PREFIXES = {"/api/monitor/file", "/api/monitor/images", "/api/monitor/review", "/api/ftp/"}  # imágenes sin auth
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    from api.auth import ensure_default_admin
-    ensure_default_admin()
-    from api.staging import staging_loop
-    task = asyncio.create_task(staging_loop())
-    yield
-    task.cancel()
+from api.core.lifespan import lifespan
+from api.core.security import install_security
 
 
 app = FastAPI(title="CParking AI Backend", version="2.0", lifespan=lifespan)
-
-# CORS middleware PRIMERO (se agrega al inicio)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,
-)
-
-
-def _cors_headers() -> dict:
-    return {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Max-Age": "3600"
-    }
-
-
-@app.middleware("http")
-async def security_middleware(request: Request, call_next):
-    from jose import JWTError, jwt as _jwt
-    from fastapi.responses import Response
-
-    # Preflight requests siempre OK
-    if request.method == "OPTIONS":
-        return Response(status_code=200, headers=_cors_headers())
-
-    client = request.client.host if request.client else ""
-    is_local = client in ("127.0.0.1", "::1", "localhost")
-    path = request.url.path
-
-    # 1. API key OR JWT check (externo solamente)
-    is_public = path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
-    if not is_local and not is_public:
-        has_valid_api_key = False
-        if _API_KEY and request.headers.get("X-API-Key", "") == _API_KEY:
-            has_valid_api_key = True
-
-        has_valid_jwt = False
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            try:
-                _jwt.decode(auth_header[7:], _JWT_SECRET, algorithms=["HS256"])
-                has_valid_jwt = True
-            except JWTError:
-                pass
-
-        if not (has_valid_api_key or has_valid_jwt):
-            return JSONResponse({"detail": "Se requiere autenticación (API Key o JWT)"}, status_code=401, headers=_cors_headers())
-
-    response = await call_next(request)
-    # Agregar CORS headers a TODAS las respuestas
-    for key, value in _cors_headers().items():
-        response.headers[key] = value
-    return response
+install_security(app)
 
 # ─────────────────────────── Motor de IA ───────────────────────────────────
 
@@ -482,124 +394,6 @@ def run_multi_strategy(img: np.ndarray) -> Optional[dict]:
     return best
 
 
-# ─────────────────────────── Modelos Pydantic ───────────────────────────────
-
-class CarEntry(BaseModel):
-    plate: str
-    isEvent: bool = False
-    eventFee: Optional[float] = None
-    imagePath: Optional[str] = None
-
-
-class PlateCorrectionRequest(BaseModel):
-    plate: str
-
-
-class ReviewStatusRequest(BaseModel):
-    status: str
-
-# ─────────────────────────── Endpoints ─────────────────────────────────────
-
-@app.get("/api/cars")
-async def get_cars():
-    return load_db()
-
-
-@app.get("/api/history")
-async def api_get_history(limit: int = 50, date: str = None):
-    return get_history(limit=min(limit, 2000), date=date)
-
-
-@app.patch("/api/history/{session_id}/plate")
-async def api_correct_plate(session_id: int, req: PlateCorrectionRequest,
-                            user: dict = Depends(require_admin)):
-    try:
-        return correct_session_plate(session_id, req.plate, user["username"])
-    except LookupError as exc:
-        raise HTTPException(404, str(exc))
-    except (ValueError, FileExistsError) as exc:
-        raise HTTPException(409, str(exc))
-
-
-@app.patch("/api/history/{session_id}/review")
-async def api_review_session(session_id: int, req: ReviewStatusRequest,
-                             user: dict = Depends(require_admin)):
-    try:
-        return review_session(session_id, req.status, int(user["sub"]), user["username"])
-    except LookupError as exc:
-        raise HTTPException(404, str(exc))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-
-
-@app.post("/api/clear-history")
-async def api_clear_history():
-    clear_history()
-    return {"status": "cleared"}
-
-
-@app.get("/api/stats")
-async def get_stats():
-    return get_stats_today()
-
-
-@app.post("/api/detect")
-async def detect(image: UploadFile = File(...)):
-    # Modo simulado si la IA no está disponible
-    if not HAS_ML:
-        plate = f"SIM{random.randint(1000, 9999)}"
-        log_to_csv(plate, "DETECTION", "MOCKED")
-        return {"plate": plate, "mocked": True, "confidence": 0.9, "strategy": "mock"}
-
-    try:
-        contents = await image.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        if img is None:
-            return {"plate": None, "error": "image decode failed"}
-
-        result = run_multi_strategy(img)
-
-        if result:
-            log_to_csv(result["plate"], "DETECTION", "REAL", conf=result["confidence"])
-            return {
-                "plate": result["plate"],
-                "confidence": result["confidence"],
-                "strategy": result["strategy"],
-                "mocked": False,
-            }
-
-        return {"plate": None, "error": "no_detection"}
-
-    except Exception as e:
-        print(f"Error en /detect: {e}")
-        return {"plate": None, "error": str(e)}
-
-
-@app.post("/api/entry")
-async def entry(e: CarEntry):
-    entry_time = now_cl().timestamp() * 1000
-    upsert_vehicle(e.plate, entry_time, e.isEvent, e.eventFee, image_path=e.imagePath)
-    log_to_csv(e.plate, "ENTRY")
-    return {"plate": e.plate, "entryTime": entry_time, "isEvent": e.isEvent, "eventFee": e.eventFee}
-
-
-@app.post("/api/exit/{plate}")
-async def exit_car(plate: str, fee: float = 0, image_path: Optional[str] = None):
-    if not vehicle_exists(plate):
-        raise HTTPException(status_code=404, detail="Plate not in parking")
-    remove_vehicle(plate, fee=fee, image_path=image_path)
-    log_to_csv(plate, "EXIT", fee=fee)
-    return {"status": "ok"}
-
-
-@app.delete("/api/cars/{plate}")
-async def delete_car(plate: str):
-    void_vehicle(plate)
-    log_to_csv(plate, "VOID")
-    return {"status": "voided"}
-
 # Register video processor at the end to avoid circular imports
 from .video_processor import router as video_router
 app.include_router(video_router)
@@ -619,3 +413,15 @@ app.include_router(excel_router)
 # Register auth
 from .auth import router as auth_router
 app.include_router(auth_router)
+
+# Register direction configuration and aggregated audit endpoints
+from .routers.direction import router as direction_router
+app.include_router(direction_router)
+
+# Register extracted domain routers while preserving every public path
+from .routers.detection import router as detection_router
+from .routers.history import router as history_router
+from .routers.parking import router as parking_router
+app.include_router(detection_router)
+app.include_router(history_router)
+app.include_router(parking_router)

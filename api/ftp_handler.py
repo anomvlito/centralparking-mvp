@@ -27,6 +27,7 @@ from api.database import (
     find_similar_active_session, correct_session_plate, log_audit_event,
 )
 from api.staging import calculate_quality_score, staging_submit
+from api.services.direction import direction_service
 from api.video_processor import _process_video_task, VIDEO_RESULTS_DIR
 
 router = APIRouter()
@@ -84,7 +85,10 @@ def _quality_for(img: np.ndarray, plate: str, confidence: float) -> dict:
 
 
 def _handle_auto_detection(plate: str, source: str, confidence: float,
-                            strategy: str, img: np.ndarray = None) -> dict:
+                            strategy: str, img: np.ndarray = None,
+                            center_y: float = None,
+                            geometry_strategy: str = None,
+                            timestamp: float = None) -> dict:
     """
     Registra cada lectura de patente como un avistamiento — sin decidir
     automáticamente si es entrada o salida.
@@ -130,10 +134,20 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
     # Calcular quality score y enviar a staging (decide ahí si guarda la imagen)
     quality = _quality_for(img, plate, confidence)
     staging_result = staging_submit(plate, confidence, quality, strategy, img)
+    direction = direction_service.observe(
+        plate=plate,
+        center_y=center_y,
+        timestamp=timestamp,
+        geometry_strategy=geometry_strategy,
+        source=source,
+        ocr_confidence=confidence,
+        image_path=staging_result.get("image_path"),
+    )
     _append_ftp_event(plate, source, confidence, strategy, action="STAGED")
     return {"plate": plate, "action": "STAGED", "registered": False,
             "confidence": confidence, "strategy": strategy,
             "staging": staging_result,
+            "direction": direction.to_dict() if direction else None,
             "image_path": staging_result.get("image_path")}
 
 
@@ -200,6 +214,8 @@ async def ftp_image(image: UploadFile = File(...)):
     # detección efectivamente se usa (mejor candidata vigente en staging).
     detect_result = _handle_auto_detection(
         plate, "image", result["confidence"], result["strategy"], img=img,
+        center_y=result.get("center_y"),
+        geometry_strategy=result.get("position_strategy") or result["strategy"],
     )
     image_path = detect_result.get("image_path")
     detect_result["image_url"] = f"/api/monitor/file/{image_path}" if image_path else None
