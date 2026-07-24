@@ -645,7 +645,7 @@ def reconcile_detection_events(
                      entry_detection_id, exit_detection_id, match_type,
                      match_confidence)
                 VALUES (%s, %s, %s, false, NULL, 0, %s, %s,
-                        'manual_reconciliation', 'REAL', %s, %s, 'MANUAL', %s)
+                        'manual', 'REAL', %s, %s, 'MANUAL', %s)
                 RETURNING id
             """, (
                 normalized, entry["logged_at"], exit_event["logged_at"],
@@ -667,7 +667,7 @@ def reconcile_detection_events(
             ))
             cur.execute("""
                 INSERT INTO audit_log (plate, event_type, details)
-                VALUES (%s, 'DETECTIONS_RECONCILED', %s::jsonb)
+                VALUES (%s, 'STAY_RECONCILED', %s::jsonb)
             """, (
                 normalized,
                 json.dumps({
