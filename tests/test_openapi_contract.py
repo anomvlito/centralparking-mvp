@@ -60,6 +60,13 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("/api/audit/direction/config", schema["paths"])
         self.assertIn("/api/audit/direction/metrics", schema["paths"])
 
+    def test_detection_and_stay_contracts_are_additive(self):
+        schema = app.openapi()
+        self.assertIn("/api/detections", schema["paths"])
+        self.assertIn("/api/stays", schema["paths"])
+        self.assertIn("/api/stays/reconcile", schema["paths"])
+        self.assertIn("/api/detections/{detection_id}", schema["paths"])
+
 
 if __name__ == "__main__":
     unittest.main()
