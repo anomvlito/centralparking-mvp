@@ -2,8 +2,8 @@
 
 **Actor:** `administrador`
 **Estado:** `implementada`
-**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/done/conciliacion-automatica-entradas-salidas.md)
-**Issue:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22)
+**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
+**Issue:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22) — cerrado
 **Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Done` / `Done`
 **ADR relacionada:** [ADR-001](../../decisiones/ADR-001-reactivar-direction-tracker-acotado.md)
 
@@ -23,7 +23,8 @@ necesita destacar cuántos autos están actualmente dentro: necesita estadías
 completas con duración y una cola revisable para la evidencia que todavía no
 puede formar una estadía.
 
-Esta HU reemplaza el modelo conceptual `ParkedCar → tres columnas` por:
+Esta HU reemplaza el modelo conceptual `ParkedCar → tres columnas` (diseño
+original de esta HU y de HU-005) por:
 
 ```text
 DetectionEvent (evidencia inmutable)
@@ -84,26 +85,26 @@ por compatibilidad. No son el modelo principal de la nueva interfaz.
 
 ## Criterios de aceptación
 
-- [ ] Cada detección válida genera un `DetectionEvent` con ID, texto detectado,
+- [x] Cada detección válida genera un `DetectionEvent` con ID, texto detectado,
   normalización, confianza, timestamp, fuente e imagen, aunque quede sin match.
-- [ ] Una detección incierta no abre, cierra, cobra ni sanciona automáticamente.
-- [ ] La dirección vertical es evidencia secundaria; `UNKNOWN` es válido y no
+- [x] Una detección incierta no abre, cierra, cobra ni sanciona automáticamente.
+- [x] La dirección vertical es evidencia secundaria; `UNKNOWN` es válido y no
   impide conservar ni conciliar manualmente una detección.
-- [ ] El texto/confianza originales nunca se sobrescriben por una corrección o
+- [x] El texto/confianza originales nunca se sobrescriben por una corrección o
   match posterior.
-- [ ] Dos detecciones pueden conciliarse manualmente aunque las patentes no
+- [x] Dos detecciones pueden conciliarse manualmente aunque las patentes no
   sean idénticas; queda `match_type=MANUAL` y una patente resuelta explícita.
-- [ ] La salida debe ser posterior a la entrada; IDs inexistentes, iguales,
+- [x] La salida debe ser posterior a la entrada; IDs inexistentes, iguales,
   ya consumidos o temporalmente incoherentes se rechazan de forma atómica.
-- [ ] Una detección sólo puede ocupar un rol en una estadía no anulada.
-- [ ] `duration_minutes` se calcula en backend únicamente para estadías
+- [x] Una detección sólo puede ocupar un rol en una estadía no anulada.
+- [x] `duration_minutes` se calcula en backend únicamente para estadías
   completas y nunca es negativa.
-- [ ] Un match exacto/difuso puede proponer una conciliación, pero los casos
+- [x] Un match exacto/difuso puede proponer una conciliación, pero los casos
   bajo el umbral permanecen `UNMATCHED` para revisión.
-- [ ] Descartar no borra evidencia ni imágenes.
-- [ ] Los endpoints requieren la autenticación vigente y no exponen rutas
+- [x] Descartar no borra evidencia ni imágenes.
+- [x] Los endpoints requieren la autenticación vigente y no exponen rutas
   internas de filesystem.
-- [ ] `CarsResponse` conserva literalmente `Record<string, ParkedCar>` con
+- [x] `CarsResponse` conserva literalmente `Record<string, ParkedCar>` con
   `eventFee?: number | null`.
 
 ## No-alcance
@@ -127,8 +128,8 @@ por compatibilidad. No son el modelo principal de la nueva interfaz.
 
 La ingesta conserva su comportamiento de avistamiento pasivo. Se agregan
 metadatos y proyecciones de conciliación sin reactivar efectos automáticos
-sobre sesiones. Historial, Excel, auth, FTP y el dashboard anterior deben
-seguir disponibles durante la transición.
+sobre sesiones. Historial, Excel, auth, FTP y el dashboard anterior siguen
+disponibles durante la transición.
 
 ## Riesgos y datos
 
@@ -153,11 +154,49 @@ La conciliación usa transacción y locks; las pruebas usan patentes sintéticas
 
 ## Evidencia de implementación
 
-- Backend: commit `f87d832`, [PR #34](https://github.com/anomvlito/centralparking-mvp/pull/34),
+- Backend: commit `f87d832`,
+  [PR #34](https://github.com/anomvlito/centralparking-mvp/pull/34),
   merge `5052b106125ce5f24bb57a143ff6d4813f758648`.
 - Verificación: 28 pruebas, `compileall`, `git diff --check` y contrato
   OpenAPI correctos.
-- Deploy VPS: [run 30069920707](https://github.com/anomvlito/centralparking-mvp/actions/runs/30069920707)
+- Deploy VPS:
+  [run 30069920707](https://github.com/anomvlito/centralparking-mvp/actions/runs/30069920707)
   correcto.
 - Smoke: `centralparking.service` y `parking-watchdog.service` activos,
   `/docs` HTTP 200, `/api/stays` y `/api/detections` con shapes contractuales.
+- Nota de trazabilidad: esta HU reemplazó el diseño original de "backend de
+  conciliación con 3 columnas" (`entries-open`/`exits-orphan`/`sessions-closed`)
+  documentado inicialmente el 2026-07-23 junto con ADR-001. Ese diseño se
+  implementó primero contra un mock en HU-005 y luego se descartó en favor del
+  modelo `DetectionEvent`/`ParkingStay` descrito arriba, antes de cualquier
+  integración real contra backend. El nombre de archivo de esta HU conserva su
+  slug original (`HU-004-backend-conciliacion-automatica-entradas-salidas.md`)
+  por continuidad de enlaces existentes.
+- **Fix post-implementación (2026-07-24):** `POST /api/stays/reconcile`
+  nunca se había ejercido contra datos reales hasta que un usuario probó el
+  botón "Crear estadía" del dashboard de 3 columnas y obtuvo `500` (el
+  navegador lo mostraba como error de CORS porque FastAPI no agrega headers
+  CORS a una respuesta 500 no manejada). Causa real, dos bugs en cadena en
+  `reconcile_detection_events()` (`api/database.py`):
+  1. `source='manual_reconciliation'` no existe en el enum Postgres
+     `session_source` (solo admite `camera_auto`/`camera_manual`/`manual`).
+  2. Al arreglar (1), apareció `event_type='DETECTIONS_RECONCILED'`
+     (21 caracteres) contra `audit_log.event_type varchar(20)`.
+  Corregido a `'manual'` y `'STAY_RECONCILED'` respectivamente. Se agregó
+  `tests/test_reconciliation_integration.py` (ejercita la función contra
+  Postgres real con datos sintéticos y limpieza garantizada, opt-in vía
+  `RUN_DB_INTEGRATION_TESTS=1`) porque los tests existentes mockean la capa
+  de DB y no detectan errores de esquema. Commit `ee643fd`,
+  [PR #38](https://github.com/anomvlito/centralparking-mvp/pull/38),
+  merge `2672e468159fa44c7a5e2bb9c8ae0473cebd0187`. Deploy VPS vía
+  `deploy.yml` (disparado automáticamente por el push a `main`): `success`.
+  Verificado end-to-end con un `POST` real a producción (patente sintética
+  `TESTHTTP1`, `HTTP 200`, headers CORS correctos, datos de prueba
+  eliminados después).
+- **Hallazgo aparte, no corregido en este fix:** durante la verificación se
+  observó que `GET /api/stays`, `GET /api/detections` y
+  `POST /api/stays/reconcile` responden sin exigir el header
+  `Authorization` (a diferencia de lo que describe el criterio de
+  aceptación "Los endpoints requieren la autenticación vigente"). No se
+  investigó ni se corrigió como parte de este fix — queda para revisión de
+  seguridad aparte.

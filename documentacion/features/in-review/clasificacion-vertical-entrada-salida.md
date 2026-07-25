@@ -1,7 +1,7 @@
 # Feature — Clasificación de entrada y salida por trayectoria vertical
 
 **Etapa Project 4:** `In review`  
-**HUs relacionadas:** [HU-007](../../historias-usuario/administrador/HU-007-clasificar-direccion-trayectoria-vertical.md), [HU-008](../../historias-usuario/administrador/HU-008-configurar-parametros-clasificador-vertical.md), [HU-009](../../historias-usuario/auditor/HU-009-observar-decisiones-clasificador-vertical.md)  
+**HUs relacionadas:** [HU-007](../../historias-usuario/administrador/HU-007-clasificar-direccion-trayectoria-vertical.md), [HU-008](../../historias-usuario/administrador/HU-008-configurar-parametros-clasificador-vertical.md), [HU-009](../../historias-usuario/auditor/HU-009-observar-decisiones-clasificador-vertical.md), [HU-010](../../historias-usuario/administrador/HU-010-activar-clasificador-vertical-evidencia-suficiente.md) (propuesta)
 **ADRs:** [ADR-001](../../decisiones/ADR-001-reactivar-direction-tracker-acotado.md), [ADR-003](../../decisiones/ADR-003-clasificacion-direccion-trayectoria-vertical.md)  
 **Issues:** [#25](https://github.com/anomvlito/centralparking-mvp/issues/25), [#26](https://github.com/anomvlito/centralparking-mvp/issues/26), [#27](https://github.com/anomvlito/centralparking-mvp/issues/27)
 
@@ -43,6 +43,16 @@ regresión, consistencia, configuración validada, evidencia auditable y
 3. HU-008 gobierna parámetros.
 4. HU-009 permite medir y auditar.
 5. Activación solo con regresión, observabilidad, revisión y rollback.
+
+> **Actualización (2026-07-24):** el paso 5 ("Activación") se concretó como
+> [HU-010](../../historias-usuario/administrador/HU-010-activar-clasificador-vertical-evidencia-suficiente.md),
+> ya implementada, desplegada (PR #39) y verificada con tráfico real: video
+> alimenta el clasificador, el wiring hacia `detection_log.direction`
+> funciona extremo a extremo, y una calibración posterior de
+> `DIRECTION_MIN_SLOPE` (0.01 → 0.006, ver
+> [guía de configuración](../../guias/configuracion-clasificador-vertical.md))
+> ya produjo `APPROACHING`/`DEPARTING` reales en producción. Sigue en modo
+> sombra (`DIRECTION_OBSERVATION_ONLY=true`) — sin efectos sobre sesiones.
 
 ## Contratos
 
