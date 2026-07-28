@@ -1,6 +1,6 @@
 # Feature — Estadías conciliadas desde detecciones particulares
 
-**Etapa Project 4:** `In progress`
+**Etapa Project 4:** `Done`
 **HUs:** [HU-004](../../historias-usuario/administrador/HU-004-backend-conciliacion-automatica-entradas-salidas.md), [HU-005](../../historias-usuario/administrador/HU-005-frontend-dashboard-tres-columnas-conciliacion.md)
 **Issues:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22), [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
 
@@ -49,6 +49,13 @@ estadías nocturnas visibles en cada día que solapen.
 
 ## Evidencia
 
+- Fecha operativa y conciliación accesible: backend
+  [PR #41](https://github.com/anomvlito/centralparking-mvp/pull/41),
+  deploy
+  [30392654410](https://github.com/anomvlito/centralparking-mvp/actions/runs/30392654410);
+  frontend
+  [PR #8](https://github.com/anomvlito/adyac-camaras-frontend/pull/8),
+  Vercel Production y smoke HTTP 200.
 - Backend: [PR #34](https://github.com/anomvlito/centralparking-mvp/pull/34),
   deploy [30069920707](https://github.com/anomvlito/centralparking-mvp/actions/runs/30069920707).
 - Frontend: [PR #5](https://github.com/anomvlito/adyac-camaras-frontend/pull/5),
