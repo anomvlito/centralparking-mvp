@@ -7,11 +7,60 @@ from api.database import (
     _add_operational_day_overlap,
     _operational_day_bounds,
     _stay_from_row,
+    build_stay_proposals,
+    is_valid_plate,
+    normalize_plate,
+    reconcile_detection_events,
 )
 from api.services import reconciliation
 
 
 class ReconciliationServiceTests(unittest.TestCase):
+    def _event(self, event_id, plate, at, confidence=0.9, direction="UNKNOWN"):
+        return {
+            "detection_id": event_id,
+            "detected_plate": plate,
+            "normalized_plate": plate,
+            "detected_at": at,
+            "confidence": confidence,
+            "image_url": None,
+            "direction": direction,
+            "match_status": "UNMATCHED",
+            "stay_id": None,
+            "source": "TEST",
+        }
+
+    def test_plate_format_is_exactly_six_after_normalization(self):
+        self.assertEqual(normalize_plate("ab-cd 12"), "ABCD12")
+        self.assertTrue(is_valid_plate("ab-cd 12"))
+        self.assertFalse(is_valid_plate("ABC12"))
+        self.assertFalse(is_valid_plate("ABCDEFG"))
+
+    def test_exact_proposal_is_read_only_pair(self):
+        events = [
+            self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),
+            self._event(2, "ABC123", "2026-07-28T10:00:00-04:00"),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["match_type"], "EXACT")
+        self.assertEqual(proposals[0]["duration_minutes"], 120)
+
+    def test_fuzzy_proposal_requires_distance_one_and_window(self):
+        events = [
+            self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),
+            self._event(2, "ABC128", "2026-07-28T10:00:00-04:00"),
+            self._event(3, "ZZZ999", "2026-07-30T12:00:00-04:00"),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["match_type"], "FUZZY")
+        self.assertEqual(proposals[0]["distance"], 1)
+
+    def test_reconciliation_rejects_non_six_character_plate_before_db(self):
+        with self.assertRaisesRegex(ValueError, "exactamente 6"):
+            reconcile_detection_events(1, 2, "ABC12")
+
     def test_operational_day_uses_chile_boundaries(self):
         day_start, day_end = _operational_day_bounds("2026-07-28")
 

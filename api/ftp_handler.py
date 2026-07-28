@@ -16,9 +16,10 @@ import re
 import csv
 import json
 import threading
+import datetime
 import numpy as np
 import cv2
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import APIRouter, UploadFile, File, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -26,7 +27,9 @@ from api.detect import alpr, HAS_ML, run_multi_strategy
 from api.database import (
     now_cl,
     find_similar_active_session, correct_session_plate, log_audit_event,
+    promote_review_image,
 )
+from api.auth import get_current_user, require_admin
 from api.staging import calculate_quality_score, staging_submit
 from api.services.direction import direction_service
 from api.video_processor import _process_video_task, VIDEO_RESULTS_DIR
@@ -315,7 +318,11 @@ async def monitor_images(date: str = None, limit: int = 100):
 
 
 @router.get("/api/monitor/review")
-async def monitor_review(date: str = None):
+async def monitor_review(
+    date: str = None,
+    limit: int = Query(100, ge=1, le=500),
+    _: dict = Depends(get_current_user),
+):
     """Imágenes sin detección pendientes de revisión desde /ftp/revisar/{date}/"""
     if not date:
         date = now_cl().strftime("%Y-%m-%d")
@@ -327,7 +334,7 @@ async def monitor_review(date: str = None):
     files = sorted(
         [f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))],
         reverse=True,
-    )
+    )[:limit]
 
     images = []
     for fname in files:
@@ -336,6 +343,54 @@ async def monitor_review(date: str = None):
         images.append(meta)
 
     return {"date": date, "images": images}
+
+
+class ReviewPromotionRequest(BaseModel):
+    date: str
+    filename: str
+    plate: str
+
+
+@router.post("/api/monitor/review/promote")
+async def promote_review(
+    request: ReviewPromotionRequest,
+    user: dict = Depends(require_admin),
+):
+    try:
+        target_date = datetime.date.fromisoformat(request.date)
+    except ValueError as exc:
+        raise HTTPException(422, "La fecha debe usar YYYY-MM-DD") from exc
+    if os.path.basename(request.filename) != request.filename:
+        raise HTTPException(400, "Nombre de archivo inválido")
+    full_path = os.path.realpath(
+        os.path.join(FTP_REVIEW_DIR, request.date, request.filename)
+    )
+    review_root = os.path.realpath(FTP_REVIEW_DIR)
+    if not full_path.startswith(review_root + os.sep):
+        raise HTTPException(403, "Ruta inválida")
+    if not os.path.isfile(full_path):
+        raise HTTPException(404, "Imagen no encontrada")
+    meta = _parse_archive_filename(request.filename)
+    try:
+        detected_at = (
+            datetime.datetime.combine(
+                target_date,
+                datetime.time.fromisoformat(meta["time"]),
+                tzinfo=now_cl().tzinfo,
+            )
+            if meta.get("time")
+            else datetime.datetime.fromtimestamp(
+                os.path.getmtime(full_path), tz=now_cl().tzinfo
+            )
+        )
+        return promote_review_image(
+            request.plate,
+            os.path.relpath(full_path, "/ftp"),
+            detected_at,
+            user["username"],
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
 
 
 @router.get("/api/monitor/file/{folder}/{date}/{filename}")
