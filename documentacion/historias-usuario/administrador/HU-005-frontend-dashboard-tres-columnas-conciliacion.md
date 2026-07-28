@@ -1,8 +1,8 @@
 # HU-005 — Dashboard de 3 columnas para conciliar entradas y salidas
 
 **Actor:** `administrador`
-**Estado:** `en-progreso`
-**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
+**Estado:** `implementada`
+**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/done/conciliacion-automatica-entradas-salidas.md)
 **Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
 **Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — cierre verificado después de producción
 **HU backend:** [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
@@ -51,7 +51,7 @@ dificultando corregir manualmente una clasificación equivocada.
 - [x] Existe un único selector de fecha operativa, iniciado en la fecha actual
   de `America/Santiago`; al cambiarlo se recargan columnas, triage y sesiones
   completas con el mismo valor `YYYY-MM-DD`.
-- [ ] Junto al selector existen controles para avanzar o retroceder exactamente
+- [x] Junto al selector existen controles para avanzar o retroceder exactamente
   un día; el avance queda deshabilitado en la fecha operativa actual y el
   selector manual tampoco acepta fechas futuras.
 - [x] Sin una acción explícita nunca se mezclan pendientes de todas las fechas.
@@ -180,6 +180,15 @@ de la app (Historial, Sightings y Reconciliación Excel) no se ve afectado.
    TypeScript y build aislado.
 
 ## Evidencia de implementación
+
+- **Navegación diaria manual (2026-07-28):**
+  - Frontend: PR
+    [#12](https://github.com/anomvlito/adyac-camaras-frontend/pull/12),
+    merge `fd120c3` y Vercel Production `success`.
+  - Controles de día anterior/siguiente, límite en hoy de
+    `America/Santiago` y `max` equivalente en el selector manual.
+  - 15 pruebas Vitest, TypeScript, lint sin errores y build Next.js correctos.
+  - Smoke de producción HTTP 200.
 
 - **Reapertura por fecha operativa (2026-07-28):**
   - Backend/documentación: commits `f66a61b` y `f5ec9d0`,
