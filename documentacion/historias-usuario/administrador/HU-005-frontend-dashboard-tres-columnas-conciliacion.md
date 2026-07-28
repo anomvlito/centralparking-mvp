@@ -1,10 +1,10 @@
 # HU-005 — Dashboard de 3 columnas para conciliar entradas y salidas
 
 **Actor:** `administrador`
-**Estado:** `en-progreso`
-**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
-**Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23) — reabierto
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
+**Estado:** `implementada`
+**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/done/conciliacion-automatica-entradas-salidas.md)
+**Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — cierre verificado después de producción
 **HU backend:** [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
 
 ## Historia
@@ -48,41 +48,41 @@ dificultando corregir manualmente una clasificación equivocada.
 
 ## Criterios de aceptación
 
-- [ ] Existe un único selector de fecha operativa, iniciado en la fecha actual
+- [x] Existe un único selector de fecha operativa, iniciado en la fecha actual
   de `America/Santiago`; al cambiarlo se recargan columnas, triage y sesiones
   completas con el mismo valor `YYYY-MM-DD`.
-- [ ] Sin una acción explícita nunca se mezclan pendientes de todas las fechas.
-- [ ] Una estadía completa pertenece al día consultado cuando su intervalo
+- [x] Sin una acción explícita nunca se mezclan pendientes de todas las fechas.
+- [x] Una estadía completa pertenece al día consultado cuando su intervalo
   `[entry_time, exit_time]` se solapa con cualquier instante de ese día en
   `America/Santiago`; una estadía nocturna puede aparecer en ambos días.
-- [ ] Una opción explícita permite incluir pendientes del día anterior para
+- [x] Una opción explícita permite incluir pendientes del día anterior para
   conciliar estadías nocturnas; se deduplican y no se cargan fechas anteriores.
-- [ ] El Dashboard muestra 3 columnas: (1) Entradas pendientes, (2) Salidas
+- [x] El Dashboard muestra 3 columnas: (1) Entradas pendientes, (2) Salidas
   pendientes, (3) Sesiones completas.
-- [ ] Columna 1 y columna 2 se derivan client-side del mismo array que hoy
+- [x] Columna 1 y columna 2 se derivan client-side del mismo array que hoy
   trae `fetchUnmatchedDetections` (`GET /api/detections?match_status=UNMATCHED`):
   columna 1 = `direction === "APPROACHING"`, columna 2 = `direction === "DEPARTING"`.
-- [ ] Una franja de triage aparte (fuera de columnas 1 y 2) muestra las
+- [x] Una franja de triage aparte (fuera de columnas 1 y 2) muestra las
   detecciones con `direction === "UNKNOWN"`, con ambos botones "Es entrada" /
   "Es salida" visibles — no se asignan por defecto a ninguna columna.
-- [ ] Toda detección ofrece `Usar como entrada`, `Usar como salida` y
+- [x] Toda detección ofrece `Usar como entrada`, `Usar como salida` y
   `Descartar`, incluso si `direction` sugiere un rol; la dirección es ayuda
   visual y nunca autoridad.
-- [ ] Columna 3 consume `GET /api/stays?status=COMPLETED` (`fetchStays`) y
+- [x] Columna 3 consume `GET /api/stays?status=COMPLETED` (`fetchStays`) y
   reutiliza el componente `StayEvidence` ya existente: evidencia de entrada a
   la izquierda, patente + duración al centro, evidencia de salida a la
   derecha.
-- [ ] Seleccionar una tarjeta como entrada (columna 1 o triage) y otra como
+- [x] Seleccionar una tarjeta como entrada (columna 1 o triage) y otra como
   salida (columna 2 o triage) habilita la barra de conciliación manual con
   patente resuelta editable → `POST /api/stays/reconcile` (sin cambios de
   lógica respecto a la iteración anterior).
-- [ ] La barra de conciliación permanece visible cerca de los filtros, permite
+- [x] La barra de conciliación permanece visible cerca de los filtros, permite
   limpiar la selección y explica por qué `Crear estadía` está deshabilitado.
-- [ ] Descartar una tarjeta (columna 1, 2 o triage) → `PATCH
+- [x] Descartar una tarjeta (columna 1, 2 o triage) → `PATCH
   /api/detections/{id}` con `action: dismiss`, sin borrar el registro.
-- [ ] Tras conciliar o descartar, las 3 zonas se refrescan (mismo polling de
+- [x] Tras conciliar o descartar, las 3 zonas se refrescan (mismo polling de
   `DASHBOARD_REFRESH_MS`, 15s).
-- [ ] El layout se adapta sin huecos ni columnas rotas en desktop y mobile
+- [x] El layout se adapta sin huecos ni columnas rotas en desktop y mobile
   (1 columna en mobile, 3 en desktop).
 
 ## No-alcance
@@ -177,6 +177,27 @@ de la app (Historial, Sightings y Reconciliación Excel) no se ve afectado.
    TypeScript y build aislado.
 
 ## Evidencia de implementación
+
+- **Reapertura por fecha operativa (2026-07-28):**
+  - Backend/documentación: commits `f66a61b` y `f5ec9d0`,
+    [PR #41](https://github.com/anomvlito/centralparking-mvp/pull/41),
+    merge `e0af2eb36da301011fa6ccf58a0db5551e1c0ced`.
+  - Frontend: commit `91e0245`,
+    [PR #8](https://github.com/anomvlito/adyac-camaras-frontend/pull/8),
+    merge `59c55e7cdb49eae616eacc1e4bdc5bdf6c685df5`.
+  - Backend: 10 pruebas contractuales `unittest`, `compileall`, import de
+    FastAPI y `git diff --check` correctos.
+  - Frontend: 14 pruebas Vitest, lint sin errores (4 advertencias
+    preexistentes de `<img>`), TypeScript, build Next.js y `git diff --check`
+    correctos.
+  - Deploy backend:
+    [run 30392654410](https://github.com/anomvlito/centralparking-mvp/actions/runs/30392654410)
+    correcto; `centralparking.service` y `parking-watchdog.service` activos,
+    checkout de deploy en el merge, `/docs` HTTP 200 y fecha inválida HTTP 422.
+  - Vercel Production `success` para el merge frontend; smoke HTTP 200 en
+    `https://centralparking-j6wsnojbe-fas-projects-aa4f98ac.vercel.app`.
+  - Smoke funcional sin datos sensibles: `/api/stays` devolvió estadías para
+    fechas históricas reales y `/api/detections` respondió al día operativo.
 
 - Rama/worktree: `agent/hu-005-tres-columnas` en
   `.worktrees/hu-005-tres-columnas-frontend`, basada en `origin/main` real
