@@ -1,10 +1,10 @@
 # HU-011 — Validar patentes y proponer conciliaciones revisables
 
-**Actor:** `administrador`  
-**Estado:** `en-progreso`  
-**Feature relacionada:** [Matching revisable de detecciones](../../features/in-progress/matching-revisable-detecciones.md)  
-**Issue:** [#43](https://github.com/anomvlito/centralparking-mvp/issues/43)  
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
+**Actor:** `administrador`
+**Estado:** `implementada`
+**Feature relacionada:** [Matching revisable de detecciones](../../features/done/matching-revisable-detecciones.md)
+**Issue:** [#43](https://github.com/anomvlito/centralparking-mvp/issues/43)
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — cierre verificado después de producción
 
 ## Historia
 
@@ -24,24 +24,24 @@ tienen una patente resuelta ni `DetectionEvent`.
 
 ## Criterios de aceptación
 
-- [ ] La normalización elimina símbolos y exige exactamente seis caracteres
+- [x] La normalización elimina símbolos y exige exactamente seis caracteres
   alfanuméricos.
-- [ ] Una lectura inválida queda `INVALID_FORMAT`, conserva imagen, timestamp,
+- [x] Una lectura inválida queda `INVALID_FORMAT`, conserva imagen, timestamp,
   OCR original y auditoría, y no aparece como `UNMATCHED`.
-- [ ] Un backfill idempotente reclasifica pendientes históricos inválidos sin
+- [x] Un backfill idempotente reclasifica pendientes históricos inválidos sin
   borrar archivos ni filas.
-- [ ] La patente resuelta de una conciliación también exige seis caracteres.
-- [ ] `GET /api/stay-proposals?date=YYYY-MM-DD` devuelve propuestas exactas y
+- [x] La patente resuelta de una conciliación también exige seis caracteres.
+- [x] `GET /api/stay-proposals?date=YYYY-MM-DD` devuelve propuestas exactas y
   difusas, nunca crea sesiones ni consume detecciones.
-- [ ] Las propuestas respetan salida posterior, máximo de 24 horas, consumo
+- [x] Las propuestas respetan salida posterior, máximo de 24 horas, consumo
   único y prioridad de match exacto; dirección/confianza sólo ponderan.
-- [ ] El administrador puede aceptar una propuesta mediante el flujo manual
+- [x] El administrador puede aceptar una propuesta mediante el flujo manual
   existente, editar la patente o ignorarla.
-- [ ] Una imagen de `/ftp/revisar` puede promoverse con patente válida a
+- [x] Una imagen de `/ftp/revisar` puede promoverse con patente válida a
   `DetectionEvent` sin mover ni borrar el archivo.
-- [ ] Lecturas, propuestas, promoción y conciliación requieren autenticación;
+- [x] Lecturas, propuestas, promoción y conciliación requieren autenticación;
   las escrituras requieren rol administrador.
-- [ ] La UI separa propuestas, pendientes sin propuesta y formatos inválidos,
+- [x] La UI separa propuestas, pendientes sin propuesta y formatos inválidos,
   conservando fecha operativa y revisión humana.
 
 ## No-alcance
@@ -104,5 +104,20 @@ y recuperación manual de evidencia. No se elimina historial.
 
 ## Evidencia de implementación
 
-- Commits/PR/deploy: pendientes.
-- Verificaciones: pendientes.
+- Backend/documentación: commits `d2d1e06` y `8fd0317`,
+  [PR #44](https://github.com/anomvlito/centralparking-mvp/pull/44),
+  merge `4d80d427fd21c9f8fe7736f38ddf707e0480c3c7`.
+- Frontend: commit `37e34a4`,
+  [PR #9](https://github.com/anomvlito/adyac-camaras-frontend/pull/9),
+  merge `ab4c18fd5d630c2fef609c3eec3572b7f4fb7b28`.
+- Verificación local: 14 pruebas backend, `compileall`, 14 pruebas frontend,
+  lint sin errores, TypeScript y build Next.js correctos.
+- Deploy backend:
+  [run 30393877329](https://github.com/anomvlito/centralparking-mvp/actions/runs/30393877329)
+  correcto; servicios activos, `/docs` 200 y rutas protegidas 401 sin token.
+- Backfill productivo: 1.115 filas respaldadas y reclasificadas
+  `INVALID_FORMAT`; 877 mantienen imagen; 5.396 continúan `UNMATCHED`.
+- Propuestas agregadas para 2026-07-28: 177 (138 `EXACT`, 39 `FUZZY`), sin
+  crear ni consumir sesiones.
+- Vercel Production `success` para el merge frontend; smoke HTTP 200 en
+  `https://centralparking-8o8d1fsb0-fas-projects-aa4f98ac.vercel.app`.
