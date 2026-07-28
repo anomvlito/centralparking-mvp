@@ -7,7 +7,9 @@ from api.database import (
     _add_operational_day_overlap,
     _operational_day_bounds,
     _stay_from_row,
+    auto_reconcile_exact_matches,
     build_stay_proposals,
+    get_stay_proposals,
     is_zero_minute_duration,
     is_valid_plate,
     normalize_plate,
@@ -72,6 +74,37 @@ class ReconciliationServiceTests(unittest.TestCase):
         self.assertEqual(len(proposals), 1)
         self.assertEqual(proposals[0]["match_type"], "FUZZY")
         self.assertEqual(proposals[0]["distance"], 1)
+
+    @patch("api.database.get_detection_events")
+    def test_zero_minute_proposals_are_not_returned_to_dashboard(self, get_events):
+        get_events.side_effect = [[
+            self._event(1, "ABC123", "2026-07-28T10:00:00-04:00"),
+            self._event(2, "ABC128", "2026-07-28T10:00:59-04:00"),
+        ], []]
+
+        self.assertEqual(get_stay_proposals("2026-07-28"), [])
+
+    @patch("api.database.get_stay_proposals")
+    @patch("api.database.reconcile_detection_events")
+    def test_auto_reconciliation_discards_zero_minute_fuzzy_proposal(
+        self, reconcile, get_proposals
+    ):
+        get_proposals.return_value = [{
+            "entry": {"detection_id": 1},
+            "exit": {"detection_id": 2},
+            "resolved_plate": "ABC123",
+            "match_type": "FUZZY",
+            "duration_minutes": 0,
+        }]
+        reconcile.return_value = {"status": "DUPLICATE"}
+
+        result = auto_reconcile_exact_matches("2026-07-28")
+
+        self.assertEqual(result["duplicates"], 1)
+        reconcile.assert_called_once_with(1, 2, "ABC123", match_type="FUZZY")
+        get_proposals.assert_called_once_with(
+            date="2026-07-28", limit=200, include_zero_duration=True
+        )
 
     def test_reconciliation_rejects_non_six_character_plate_before_db(self):
         with self.assertRaisesRegex(ValueError, "exactamente 6"):
