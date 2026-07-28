@@ -1,6 +1,6 @@
 # Feature — Matching revisable de detecciones
 
-**Etapa Project 4:** `In progress`
+**Etapa Project 4:** `Done`
 **HU:** [HU-011](../../historias-usuario/administrador/HU-011-validar-patentes-proponer-conciliacion.md)
 
 ## Resultado esperado
