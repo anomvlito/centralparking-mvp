@@ -1,6 +1,6 @@
 # Feature — Matching revisable de detecciones
 
-**Etapa Project 4:** `In progress`  
+**Etapa Project 4:** `Done`  
 **HU:** [HU-011](../../historias-usuario/administrador/HU-011-validar-patentes-proponer-conciliacion.md)
 
 ## Resultado esperado
@@ -21,3 +21,12 @@ manualmente sin borrar ni mover archivos.
 
 Backend y frontend desplegados, migración verificada por conteos agregados,
 propuestas y promoción manual probadas, sin regresión de historial/FTP/Excel.
+
+## Evidencia
+
+- Backend [PR #44](https://github.com/anomvlito/centralparking-mvp/pull/44),
+  deploy [30393877329](https://github.com/anomvlito/centralparking-mvp/actions/runs/30393877329).
+- Frontend [PR #9](https://github.com/anomvlito/adyac-camaras-frontend/pull/9),
+  Vercel Production y smoke HTTP 200.
+- Backfill respaldado: 1.115 inválidas; evidencia preservada.
+- Motor productivo: 138 propuestas exactas y 39 difusas en la fecha de smoke.
