@@ -1,10 +1,10 @@
 # HU-012 — Excluir vehículos operativos y descartar estadías duplicadas
 
 **Actor:** `administrador`
-**Estado:** `en-progreso`
-**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/in-progress/exclusiones-evidencia-navegable.md)
+**Estado:** `implementada`
+**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/done/exclusiones-evidencia-navegable.md)
 **Issue:** [#48](https://github.com/anomvlito/centralparking-mvp/issues/48)
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Done` / `Done`
 
 ## Historia
 
@@ -21,7 +21,7 @@ similares, descartar estadías de cero minutos y ampliar cualquier foto**, para
 - [x] Un backfill idempotente descarta pendientes históricos alcanzados.
 - [x] Una pareja con duración calculada de 0 minutos no crea una estadía útil:
   queda `VOID`, sus detecciones `DISMISSED` y se audita como duplicado.
-- [ ] Las propuestas exactas o fuzzy inferiores a 60 segundos se descartan
+- [x] Las propuestas exactas o fuzzy inferiores a 60 segundos se descartan
   automáticamente antes de mostrarse y no reaparecen al recargar.
 - [x] Un backfill reversible anula sesiones de 0 minutos ya existentes sin
   borrar fotos o filas.
@@ -72,5 +72,12 @@ es explícita, auditable y reversible. `VOID`/`DISMISSED` preservan evidencia.
 - Configuración privada aplicada sin publicar la patente: 90 detecciones
   descartadas y 39 sesiones excluidas anuladas; 1 sesión de duración inferior
   a un minuto anulada por el backfill reversible.
-- Reabierta el 2026-07-28: producción todavía mostraba propuestas fuzzy
-  inferiores a 60 segundos como `0 min`; corrección y nueva evidencia pendientes.
+- Regresión corregida en backend PR
+  [#51](https://github.com/anomvlito/centralparking-mvp/pull/51) y corrección
+  de integridad referencial en PR
+  [#52](https://github.com/anomvlito/centralparking-mvp/pull/52).
+- Antes del arreglo se observaron 22 propuestas de `0 min`; después del deploy
+  y backfill quedaron 0, incluyendo el listado interno sin filtro. Permanecen
+  14 propuestas de duración válida.
+- Verificación final: 18 pruebas unitarias/contrato, 2 pruebas PostgreSQL,
+  `compileall`, servicio activo y `/docs` HTTP 200.
