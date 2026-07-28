@@ -1,6 +1,6 @@
 # Feature — Exclusiones y evidencia navegable
 
-**Etapa Project 4:** `In progress`
+**Etapa Project 4:** `Done`
 **HU:** [HU-012](../../historias-usuario/administrador/HU-012-excluir-vehiculos-y-duplicados.md)
 
 Excluye vehículos configurados y variantes OCR cercanas, elimina de operación
