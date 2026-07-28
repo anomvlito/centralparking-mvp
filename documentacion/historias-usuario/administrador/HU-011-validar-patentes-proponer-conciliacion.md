@@ -1,9 +1,9 @@
 # HU-011 — Validar patentes y proponer conciliaciones revisables
 
-**Actor:** `administrador`  
-**Estado:** `implementada`  
-**Feature relacionada:** [Matching revisable de detecciones](../../features/done/matching-revisable-detecciones.md)  
-**Issue:** [#43](https://github.com/anomvlito/centralparking-mvp/issues/43)  
+**Actor:** `administrador`
+**Estado:** `implementada`
+**Feature relacionada:** [Matching revisable de detecciones](../../features/done/matching-revisable-detecciones.md)
+**Issue:** [#43](https://github.com/anomvlito/centralparking-mvp/issues/43)
 **Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — cierre verificado después de producción
 
 ## Historia
