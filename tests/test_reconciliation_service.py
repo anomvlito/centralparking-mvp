@@ -3,11 +3,41 @@ import unittest
 from unittest.mock import patch
 
 from api.schemas.reconciliation import ReconcileStayRequest
-from api.database import _stay_from_row
+from api.database import (
+    _add_operational_day_overlap,
+    _operational_day_bounds,
+    _stay_from_row,
+)
 from api.services import reconciliation
 
 
 class ReconciliationServiceTests(unittest.TestCase):
+    def test_operational_day_uses_chile_boundaries(self):
+        day_start, day_end = _operational_day_bounds("2026-07-28")
+
+        self.assertEqual(day_start.isoformat(), "2026-07-28T00:00:00-04:00")
+        self.assertEqual(day_end.isoformat(), "2026-07-29T00:00:00-04:00")
+
+    def test_operational_day_rejects_invalid_date(self):
+        with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+            _operational_day_bounds("28-07-2026")
+
+    def test_stay_date_filter_uses_interval_overlap(self):
+        conditions = []
+        params = []
+
+        _add_operational_day_overlap(conditions, params, "2026-07-28")
+
+        self.assertEqual(
+            conditions,
+            [
+                "COALESCE(entry_time, exit_time) < %s",
+                "COALESCE(exit_time, entry_time, 'infinity'::timestamptz) >= %s",
+            ],
+        )
+        self.assertEqual(params[0].isoformat(), "2026-07-29T00:00:00-04:00")
+        self.assertEqual(params[1].isoformat(), "2026-07-28T00:00:00-04:00")
+
     def test_technical_close_is_not_reported_as_twenty_hour_stay(self):
         entry = datetime.datetime(
             2026, 7, 23, 10, 0, tzinfo=datetime.timezone.utc

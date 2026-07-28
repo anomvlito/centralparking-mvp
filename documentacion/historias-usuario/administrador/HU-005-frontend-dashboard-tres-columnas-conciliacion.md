@@ -1,11 +1,10 @@
 # HU-005 — Dashboard de 3 columnas para conciliar entradas y salidas
 
 **Actor:** `administrador`
-**Estado:** `en-progreso` (reapertura de alcance — ver nota de trazabilidad)
+**Estado:** `en-progreso`
 **Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
-**Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23) — cerrado en GitHub; este documento
-adelanta una reapertura de alcance aún no reflejada en el issue ni en el
-Project 4 (pendiente de autorización explícita para publicar/sincronizar).
+**Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23) — reabierto
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
 **HU backend:** [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
 
 ## Historia
@@ -15,6 +14,10 @@ Como **administrador**, quiero **ver el Dashboard organizado en tres columnas
 completas — y poder resolver manualmente los casos que quedan ambiguos**,
 para **tener una vista operativa clara de lo pendiente de conciliar, en vez de
 una única tabla de estadías con una grilla plana de detecciones debajo**.
+
+Además, quiero **seleccionar una fecha operativa que gobierne toda la vista**,
+para **no mezclar pendientes de días distintos y encontrar las estadías que
+estuvieron activas durante ese día**.
 
 ## Contexto y problema
 
@@ -35,8 +38,25 @@ esta HU estarán casi siempre vacías y la franja de triage concentrará el
 100% de la operación real — es un comportamiento esperado, no un bug de esta
 HU.
 
+La revisión operativa de 2026-07-28 detectó otra divergencia: el selector de
+fecha comenzaba vacío, por lo que se mezclaban pendientes históricos, y
+`GET /api/stays?date=...` asignaba una estadía completa exclusivamente al día
+de salida mediante `COALESCE(exit_time, entry_time)`. Una estadía nocturna no
+aparecía al revisar el día de entrada. La barra de conciliación quedaba al
+final de la página y las columnas dirigidas ocultaban la acción contraria,
+dificultando corregir manualmente una clasificación equivocada.
+
 ## Criterios de aceptación
 
+- [ ] Existe un único selector de fecha operativa, iniciado en la fecha actual
+  de `America/Santiago`; al cambiarlo se recargan columnas, triage y sesiones
+  completas con el mismo valor `YYYY-MM-DD`.
+- [ ] Sin una acción explícita nunca se mezclan pendientes de todas las fechas.
+- [ ] Una estadía completa pertenece al día consultado cuando su intervalo
+  `[entry_time, exit_time]` se solapa con cualquier instante de ese día en
+  `America/Santiago`; una estadía nocturna puede aparecer en ambos días.
+- [ ] Una opción explícita permite incluir pendientes del día anterior para
+  conciliar estadías nocturnas; se deduplican y no se cargan fechas anteriores.
 - [ ] El Dashboard muestra 3 columnas: (1) Entradas pendientes, (2) Salidas
   pendientes, (3) Sesiones completas.
 - [ ] Columna 1 y columna 2 se derivan client-side del mismo array que hoy
@@ -45,6 +65,9 @@ HU.
 - [ ] Una franja de triage aparte (fuera de columnas 1 y 2) muestra las
   detecciones con `direction === "UNKNOWN"`, con ambos botones "Es entrada" /
   "Es salida" visibles — no se asignan por defecto a ninguna columna.
+- [ ] Toda detección ofrece `Usar como entrada`, `Usar como salida` y
+  `Descartar`, incluso si `direction` sugiere un rol; la dirección es ayuda
+  visual y nunca autoridad.
 - [ ] Columna 3 consume `GET /api/stays?status=COMPLETED` (`fetchStays`) y
   reutiliza el componente `StayEvidence` ya existente: evidencia de entrada a
   la izquierda, patente + duración al centro, evidencia de salida a la
@@ -53,6 +76,8 @@ HU.
   salida (columna 2 o triage) habilita la barra de conciliación manual con
   patente resuelta editable → `POST /api/stays/reconcile` (sin cambios de
   lógica respecto a la iteración anterior).
+- [ ] La barra de conciliación permanece visible cerca de los filtros, permite
+  limpiar la selección y explica por qué `Crear estadía` está deshabilitado.
 - [ ] Descartar una tarjeta (columna 1, 2 o triage) → `PATCH
   /api/detections/{id}` con `action: dismiss`, sin borrar el registro.
 - [ ] Tras conciliar o descartar, las 3 zonas se refrescan (mismo polling de
@@ -62,28 +87,24 @@ HU.
 
 ## No-alcance
 
-- No modifica el backend, `api/staging.py`, `api/ftp_handler.py` ni la tabla
-  `staging_detections` — el gap de wiring de `direction` (ver "Riesgos y
-  datos") queda documentado para una HU/spike de backend separada, no se
-  resuelve acá.
+- No modifica `api/staging.py`, `api/ftp_handler.py` ni la tabla
+  `staging_detections`; el gap de wiring de `direction` queda fuera.
 - No agrega `GET /api/stays?status=ENTRY_ONLY` ni `EXIT_ONLY` en esta
   iteración — hoy no los llena ningún flujo activo; se evalúa sumarlos más
   adelante si empiezan a tener datos reales.
-- No modifica `src/lib/stays.ts`, sus tipos ni sus funciones — se reutilizan
-  literalmente.
+- No agrega un historial paralelo ni cambia los DTO `DetectionEvent` o
+  `ParkingStay`.
 - No modifica `/api/stats`, Historial ni Reconciliación de Excel.
-- No publica (commit/push/PR/merge/deploy) en esta etapa — implementación y
-  verificación solamente local, por decisión explícita del usuario.
-- No reabre el issue #23 ni mueve la tarjeta del Project 4 en GitHub — eso
-  requiere autorización separada.
+- No mezcla automáticamente más de dos fechas de detecciones.
 
 ## Código relacionado
 
-- Frontend: `adyac-camaras-frontend/src/features/dashboard/Dashboard.tsx` —
-  único archivo a reescribir. Reutiliza sin cambios `src/lib/stays.ts` y
-  `src/lib/constants.ts` (`DASHBOARD_REFRESH_MS`).
-- Backend: no requiere cambios en esta HU.
-- Operación: no requiere cambios.
+- Frontend: `adyac-camaras-frontend/src/features/dashboard/Dashboard.tsx`,
+  `src/lib/stays.ts` y pruebas relacionadas.
+- Backend: `api/database.py`, `api/routers/reconciliation.py` y pruebas
+  relacionadas; se preservan rutas y shapes.
+- Operación: deploy habitual de `centralparking.service` y Vercel, sin mover
+  datos runtime.
 
 ## Contratos que deben preservarse
 
@@ -92,14 +113,14 @@ HU.
   sin cambios, se consumen tal cual.
 - `POST /api/stays/reconcile` y `PATCH /api/detections/{id}` conservan su
   contrato y comportamiento actuales.
+- `GET /api/stays?date=YYYY-MM-DD` conserva query y respuesta; su semántica
+  queda precisada como solapamiento del día en `America/Santiago`.
 - Login, Historial, Sightings y Reconciliación de Excel sin cambios.
 
 ## Impacto sobre funcionalidades existentes
 
-Cambia únicamente la presentación visual del Dashboard (de "tabla + grilla
-única" a "3 columnas + franja de triage"). No cambia qué datos se piden, ni
-cuándo, ni la lógica de conciliación/descarte. El resto de la app (Historial,
-Reconciliación) no se ve afectado.
+Cambia la presentación y la semántica del filtro `date` de estadías. El resto
+de la app (Historial, Sightings y Reconciliación Excel) no se ve afectado.
 
 ## Riesgos y datos
 
@@ -125,6 +146,14 @@ Reconciliación) no se ve afectado.
 ## Pruebas de regresión
 
 - Login, Historial, Sightings y Reconciliación de Excel sin cambios.
+- Fecha inicial corresponde a hoy en Chile y ambas lecturas incluyen la fecha.
+- Cambio de fecha recarga estadías y pendientes sin datos de otros días.
+- Estadía dentro del día y nocturna se incluyen por solapamiento; una estadía
+  fuera del día queda excluida.
+- Pendientes del día anterior sólo aparecen al activar la opción y se
+  deduplican.
+- Cualquier tarjeta permite seleccionar ambos roles; orden temporal inválido
+  mantiene deshabilitada la conciliación.
 - La conciliación manual (`POST /api/stays/reconcile`) y el descarte
   (`PATCH /api/detections/{id}`) siguen funcionando igual que en la
   iteración anterior, solo cambia desde qué columna/franja se disparan.
@@ -135,21 +164,17 @@ Reconciliación) no se ve afectado.
 
 ## Propuesta técnica
 
-1. Reescribir `Dashboard.tsx` a un grid de 3 columnas (`grid-cols-1
-   lg:grid-cols-3`), reutilizando íntegramente `src/lib/stays.ts` (sin
-   cambios) y el componente `StayEvidence` ya implementado para columna 3.
-2. Derivar client-side, a partir del mismo array `detections` que ya se trae
-   hoy: `entradas = detections.filter(d => d.direction === "APPROACHING")`,
-   `salidas = ... "DEPARTING"`, `triage = ... "UNKNOWN"`.
-3. Columna 1: tarjeta con botón único "Usar como entrada" (`setEntry`) +
-   "Descartar". Columna 2: botón único "Usar como salida" (`setExit`) +
-   "Descartar". Franja de triage: ambos botones + "Descartar" (mismo
-   comportamiento que la tarjeta de "Por conciliar" de la iteración
-   anterior).
-4. Barra de confirmación (entrada + salida + patente resuelta + "Crear
-   estadía") sin cambios de lógica, solo de ubicación en el layout.
-5. Probar localmente (lint, tsc, tests, build aislado) y reportar evidencia;
-   sin publicar salvo autorización explícita adicional.
+1. Inicializar la fecha desde `Intl.DateTimeFormat` con zona
+   `America/Santiago` y enviarla siempre a ambas lecturas.
+2. Cambiar `get_parking_stays()` a límites `[inicio, día siguiente)` y
+   solapamiento de intervalos.
+3. Consultar el día anterior sólo cuando el administrador active la opción,
+   combinar y deduplicar por `detection_id`.
+4. Mantener las columnas por dirección como ayuda, pero ofrecer ambos roles en
+   todas las tarjetas.
+5. Mover la barra de selección antes de las columnas y mantenerla visible.
+6. Probar contrato SQL, cliente HTTP, interacción, responsive, lint,
+   TypeScript y build aislado.
 
 ## Evidencia de implementación
 
