@@ -411,4 +411,8 @@ async def serve_ftp_file(folder: str, date: str, filename: str):
     if not os.path.isfile(full_path):
         raise HTTPException(404, "Imagen no encontrada")
 
-    return FileResponse(full_path, media_type="image/jpeg")
+    return FileResponse(
+        full_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )

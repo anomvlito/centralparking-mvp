@@ -8,8 +8,10 @@ from api.database import (
     _operational_day_bounds,
     _stay_from_row,
     build_stay_proposals,
+    is_zero_minute_duration,
     is_valid_plate,
     normalize_plate,
+    plate_matches_exclusion,
     reconcile_detection_events,
 )
 from api.services import reconciliation
@@ -35,6 +37,20 @@ class ReconciliationServiceTests(unittest.TestCase):
         self.assertTrue(is_valid_plate("ab-cd 12"))
         self.assertFalse(is_valid_plate("ABC12"))
         self.assertFalse(is_valid_plate("ABCDEFG"))
+
+    def test_exclusion_matches_exact_and_one_ocr_character_only(self):
+        self.assertTrue(plate_matches_exclusion("ABC123", "ABC123", 1))
+        self.assertTrue(plate_matches_exclusion("ABC128", "ABC123", 1))
+        self.assertFalse(plate_matches_exclusion("ABC189", "ABC123", 1))
+
+    def test_zero_minute_duration_is_less_than_sixty_seconds(self):
+        entry = datetime.datetime(2026, 7, 28, 10, 0)
+        self.assertTrue(
+            is_zero_minute_duration(entry, entry + datetime.timedelta(seconds=59))
+        )
+        self.assertFalse(
+            is_zero_minute_duration(entry, entry + datetime.timedelta(minutes=1))
+        )
 
     def test_exact_proposal_is_read_only_pair(self):
         events = [
