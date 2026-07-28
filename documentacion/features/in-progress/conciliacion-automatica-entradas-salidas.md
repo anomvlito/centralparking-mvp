@@ -1,6 +1,6 @@
 # Feature — Estadías conciliadas desde detecciones particulares
 
-**Etapa Project 4:** `Done`
+**Etapa Project 4:** `In progress`
 **HUs:** [HU-004](../../historias-usuario/administrador/HU-004-backend-conciliacion-automatica-entradas-salidas.md), [HU-005](../../historias-usuario/administrador/HU-005-frontend-dashboard-tres-columnas-conciliacion.md)
 **Issues:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22), [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
 
@@ -17,6 +17,8 @@ OCR o dirección sean inciertos.
 - `ParkingStay`: interpretación conciliada que referencia entrada y salida.
 - Vista principal de estadías completas y duración.
 - Cola secundaria de detecciones sin pareja con match/dismiss manual.
+- Fecha operativa común para pendientes y estadías, con solapamiento correcto
+  de estadías nocturnas.
 - Matching permisivo sin exigir OCR perfecto y sin efectos autoritativos.
 
 ## Contratos y guardrails
@@ -40,6 +42,10 @@ OCR o dirección sean inciertos.
 Backend y frontend desplegados; detecciones, conciliación manual, estadías,
 duración, auth y errores verificados; regresión existente correcta y evidencia
 de producción/preview registrada.
+
+La reapertura de 2026-07-28 exige además fecha inicial de Chile, ausencia de
+mezcla histórica implícita, selección manual de rol en toda detección y
+estadías nocturnas visibles en cada día que solapen.
 
 ## Evidencia
 
