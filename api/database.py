@@ -642,7 +642,9 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
     return sorted(proposals, key=lambda item: item["exit"]["detected_at"], reverse=True)
 
 
-def get_stay_proposals(date: str, limit: int = 200) -> list[dict]:
+def get_stay_proposals(
+    date: str, limit: int = 200, include_zero_duration: bool = False
+) -> list[dict]:
     day_start, _ = _operational_day_bounds(date)
     previous_date = (day_start.date() - datetime.timedelta(days=1)).isoformat()
     events = get_detection_events(limit=500, match_status="UNMATCHED", date=date)
@@ -650,13 +652,20 @@ def get_stay_proposals(date: str, limit: int = 200) -> list[dict]:
         limit=500, match_status="UNMATCHED", date=previous_date
     )
     unique = {event["detection_id"]: event for event in events}
-    return build_stay_proposals(list(unique.values()))[:max(1, min(limit, 200))]
+    proposals = build_stay_proposals(list(unique.values()))
+    if not include_zero_duration:
+        proposals = [
+            item for item in proposals if item["duration_minutes"] > 0
+        ]
+    return proposals[:max(1, min(limit, 200))]
 
 
 def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
     proposals = [
-        item for item in get_stay_proposals(date=date, limit=limit)
-        if item["match_type"] == "EXACT"
+        item for item in get_stay_proposals(
+            date=date, limit=limit, include_zero_duration=True
+        )
+        if item["match_type"] == "EXACT" or item["duration_minutes"] == 0
     ]
     reconciled = 0
     duplicates = 0
@@ -667,7 +676,7 @@ def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
                 item["entry"]["detection_id"],
                 item["exit"]["detection_id"],
                 item["resolved_plate"],
-                match_type="EXACT",
+                match_type=item["match_type"],
             )
             if result.get("status") == "DUPLICATE":
                 duplicates += 1
