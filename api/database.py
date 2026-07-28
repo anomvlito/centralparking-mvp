@@ -415,6 +415,28 @@ _DETECTION_MATCH_STATUSES = {
 }
 
 
+def _operational_day_bounds(value: str) -> tuple[datetime.datetime, datetime.datetime]:
+    try:
+        target_date = datetime.date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("La fecha debe usar el formato YYYY-MM-DD") from exc
+    day_start = datetime.datetime.combine(
+        target_date, datetime.time.min, tzinfo=_CL
+    )
+    return day_start, day_start + datetime.timedelta(days=1)
+
+
+def _add_operational_day_overlap(
+    conditions: list[str], params: list, value: str
+) -> None:
+    day_start, day_end = _operational_day_bounds(value)
+    conditions.extend([
+        "COALESCE(entry_time, exit_time) < %s",
+        "COALESCE(exit_time, entry_time, 'infinity'::timestamptz) >= %s",
+    ])
+    params.extend([day_end, day_start])
+
+
 def _image_url(image_path: str | None) -> str | None:
     if not image_path:
         return None
@@ -557,11 +579,7 @@ def get_parking_stays(
             "(entry_time IS NULL OR exit_time IS NULL OR status = 'AUTO_CLOSED')"
         )
     if date:
-        conditions.append(
-            "(COALESCE(exit_time, entry_time) AT TIME ZONE "
-            "'America/Santiago')::date = %s::date"
-        )
-        params.append(date)
+        _add_operational_day_overlap(conditions, params, date)
     if plate:
         normalized = re.sub(r"[^A-Z0-9]", "", plate.upper())
         conditions.append("plate = %s")
