@@ -84,6 +84,30 @@ def init_db():
                 SET normalized_plate = regexp_replace(upper(plate), '[^A-Z0-9]', '', 'g')
                 WHERE normalized_plate IS NULL
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS detection_match_status_backup_hu011 (
+                    detection_id BIGINT PRIMARY KEY REFERENCES detection_log(id),
+                    previous_status VARCHAR(20) NOT NULL,
+                    backed_up_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("""
+                INSERT INTO detection_match_status_backup_hu011
+                    (detection_id, previous_status)
+                SELECT id, match_status
+                FROM detection_log
+                WHERE match_status = 'UNMATCHED'
+                  AND length(normalized_plate) != 6
+                ON CONFLICT (detection_id) DO NOTHING
+            """)
+            cur.execute("""
+                UPDATE detection_log AS detection
+                SET match_status = 'INVALID_FORMAT'
+                FROM detection_match_status_backup_hu011 AS backup
+                WHERE detection.id = backup.detection_id
+                  AND detection.match_status = 'UNMATCHED'
+                  AND length(detection.normalized_plate) != 6
+            """)
             # Buffer de staging: deduplicación + quality scoring de detecciones
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS staging_detections (
@@ -392,27 +416,138 @@ def get_direction_audit_metrics(date: str = None, limit: int = 5000) -> dict:
 
 # ─────────────────────── log / historial ────────────────────────────────────
 
+def normalize_plate(plate: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", plate.upper())
+
+
+def is_valid_plate(plate: str) -> bool:
+    return len(normalize_plate(plate)) == 6
+
+
 def log_to_db(plate: str, action: str, status: str = "REAL",
               fee: float = 0, conf: float = 1.0, image_path: str = None,
               direction: str = "UNKNOWN", source: str = None):
-    normalized = re.sub(r"[^A-Z0-9]", "", plate.upper())
+    normalized = normalize_plate(plate)
+    match_status = "UNMATCHED" if len(normalized) == 6 else "INVALID_FORMAT"
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO detection_log
                     (plate, normalized_plate, action, status, fee, confidence,
                      image_path, direction, match_status, source)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'UNMATCHED', %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (plate, normalized, action, status, fee, conf, image_path,
-                  direction, source or status))
+                  direction, match_status, source or status))
             row = cur.fetchone()
     return int(row["id"])
 
 
 _DETECTION_MATCH_STATUSES = {
-    "UNMATCHED", "MATCHED_ENTRY", "MATCHED_EXIT", "DISMISSED"
+    "UNMATCHED", "MATCHED_ENTRY", "MATCHED_EXIT", "DISMISSED",
+    "INVALID_FORMAT",
 }
+
+
+def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
+    valid = sorted(
+        [event for event in events if len(event["normalized_plate"]) == 6],
+        key=lambda event: event["detected_at"],
+    )
+    used: set[int] = set()
+    proposals: list[dict] = []
+    max_seconds = max_hours * 3600
+
+    def add_pairs(max_distance: int, match_type: str) -> None:
+        for index, entry in enumerate(valid):
+            if entry["detection_id"] in used:
+                continue
+            best = None
+            for exit_event in valid[index + 1:]:
+                if exit_event["detection_id"] in used:
+                    continue
+                seconds = (
+                    datetime.datetime.fromisoformat(exit_event["detected_at"])
+                    - datetime.datetime.fromisoformat(entry["detected_at"])
+                ).total_seconds()
+                if seconds <= 0 or seconds > max_seconds:
+                    continue
+                distance = _levenshtein(
+                    entry["normalized_plate"], exit_event["normalized_plate"]
+                )
+                if distance > max_distance:
+                    continue
+                score = min(entry["confidence"], exit_event["confidence"])
+                if entry["direction"] == "APPROACHING":
+                    score += 0.05
+                if exit_event["direction"] == "DEPARTING":
+                    score += 0.05
+                candidate = (distance, -score, seconds, exit_event)
+                if best is None or candidate[:3] < best[:3]:
+                    best = candidate
+            if best is None:
+                continue
+            exit_event = best[3]
+            used.update({entry["detection_id"], exit_event["detection_id"]})
+            proposals.append({
+                "entry": entry,
+                "exit": exit_event,
+                "resolved_plate": entry["normalized_plate"],
+                "match_type": match_type,
+                "distance": best[0],
+                "score": round(-best[1], 4),
+                "duration_minutes": int(best[2] // 60),
+            })
+
+    add_pairs(0, "EXACT")
+    add_pairs(1, "FUZZY")
+    return sorted(proposals, key=lambda item: item["exit"]["detected_at"], reverse=True)
+
+
+def get_stay_proposals(date: str, limit: int = 200) -> list[dict]:
+    day_start, _ = _operational_day_bounds(date)
+    previous_date = (day_start.date() - datetime.timedelta(days=1)).isoformat()
+    events = get_detection_events(limit=500, match_status="UNMATCHED", date=date)
+    events += get_detection_events(
+        limit=500, match_status="UNMATCHED", date=previous_date
+    )
+    unique = {event["detection_id"]: event for event in events}
+    return build_stay_proposals(list(unique.values()))[:max(1, min(limit, 200))]
+
+
+def promote_review_image(
+    plate: str, image_path: str, detected_at: datetime.datetime, username: str
+) -> dict:
+    normalized = normalize_plate(plate)
+    if len(normalized) != 6:
+        raise ValueError("La patente normalizada debe tener exactamente 6 caracteres")
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM detection_log WHERE image_path = %s LIMIT 1",
+                (image_path,),
+            )
+            existing = cur.fetchone()
+            if existing:
+                raise ValueError("La imagen ya fue promovida")
+            cur.execute("""
+                INSERT INTO detection_log
+                    (logged_at, plate, normalized_plate, action, status, fee,
+                     confidence, image_path, direction, match_status, source)
+                VALUES (%s, %s, %s, 'DETECTED', 'REVIEW_MANUAL', 0, 1.0,
+                        %s, 'UNKNOWN', 'UNMATCHED', 'review_manual')
+                RETURNING id
+            """, (detected_at, plate, normalized, image_path))
+            detection_id = int(cur.fetchone()["id"])
+            cur.execute("""
+                INSERT INTO audit_log (plate, event_type, details)
+                VALUES (%s, 'REVIEW_PROMOTED', %s::jsonb)
+            """, (normalized, json.dumps({
+                "detection_id": detection_id,
+                "image_path": image_path,
+                "username": username,
+            })))
+    return {"detection_id": detection_id, "match_status": "UNMATCHED"}
 
 
 def _operational_day_bounds(value: str) -> tuple[datetime.datetime, datetime.datetime]:
@@ -626,14 +761,15 @@ def reconcile_detection_events(
 ) -> dict:
     if entry_detection_id == exit_detection_id:
         raise ValueError("Entrada y salida deben ser detecciones distintas")
-    normalized = re.sub(r"[^A-Z0-9]", "", resolved_plate.upper())
-    if not normalized:
-        raise ValueError("La patente resuelta es obligatoria")
+    normalized = normalize_plate(resolved_plate)
+    if len(normalized) != 6:
+        raise ValueError("La patente resuelta debe tener exactamente 6 caracteres")
 
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, plate, logged_at, confidence, image_path, match_status
+                SELECT id, plate, COALESCE(normalized_plate, plate) normalized_plate,
+                       logged_at, confidence, image_path, match_status
                 FROM detection_log
                 WHERE id IN (%s, %s)
                 ORDER BY id
@@ -646,6 +782,8 @@ def reconcile_detection_events(
             exit_event = found[exit_detection_id]
             if entry["match_status"] != "UNMATCHED" or exit_event["match_status"] != "UNMATCHED":
                 raise ValueError("Una o más detecciones ya fueron conciliadas")
+            if len(entry["normalized_plate"]) != 6 or len(exit_event["normalized_plate"]) != 6:
+                raise ValueError("Las detecciones deben tener patentes normalizadas de 6 caracteres")
             if exit_event["logged_at"] <= entry["logged_at"]:
                 raise ValueError("La salida debe ser posterior a la entrada")
 

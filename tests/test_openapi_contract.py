@@ -65,6 +65,8 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("/api/detections", schema["paths"])
         self.assertIn("/api/stays", schema["paths"])
         self.assertIn("/api/stays/reconcile", schema["paths"])
+        self.assertIn("/api/stay-proposals", schema["paths"])
+        self.assertIn("/api/monitor/review/promote", schema["paths"])
         self.assertIn("/api/detections/{detection_id}", schema["paths"])
 
 

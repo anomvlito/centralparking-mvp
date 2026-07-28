@@ -2,6 +2,7 @@ from api.database import (
     dismiss_detection_event,
     get_detection_events,
     get_parking_stays,
+    get_stay_proposals,
     reconcile_detection_events,
 )
 from api.schemas.reconciliation import ReconcileStayRequest
@@ -17,6 +18,9 @@ def list_stays(limit=100, status=None, date=None, plate=None):
     return get_parking_stays(
         limit=limit, status=status, date=date, plate=plate
     )
+
+def list_proposals(date, limit=100):
+    return get_stay_proposals(date=date, limit=limit)
 
 
 def reconcile_stay(request: ReconcileStayRequest):
