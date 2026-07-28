@@ -1,4 +1,5 @@
 from api.database import (
+    add_plate_exclusion,
     auto_reconcile_exact_matches,
     dismiss_detection_event,
     get_detection_events,
@@ -25,6 +26,9 @@ def list_proposals(date, limit=100):
 
 def reconcile_exact(date, limit=200):
     return auto_reconcile_exact_matches(date=date, limit=limit)
+
+def create_plate_exclusion(plate, max_distance, username):
+    return add_plate_exclusion(plate, max_distance, username)
 
 
 def reconcile_stay(request: ReconcileStayRequest):

@@ -207,6 +207,46 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_staging_detections_expires_at
                 ON staging_detections(expires_at)
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS plate_exclusions (
+                    normalized_plate VARCHAR(6) PRIMARY KEY,
+                    max_distance INTEGER NOT NULL DEFAULT 1 CHECK (max_distance BETWEEN 0 AND 2),
+                    active BOOLEAN NOT NULL DEFAULT true,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    created_by VARCHAR(100) NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS zero_duration_backup_hu012 (
+                    session_id BIGINT PRIMARY KEY REFERENCES parking_sessions(id),
+                    previous_status VARCHAR(20) NOT NULL,
+                    backed_up_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS plate_exclusion_session_backup_hu012 (
+                    session_id BIGINT PRIMARY KEY REFERENCES parking_sessions(id),
+                    previous_status VARCHAR(20) NOT NULL,
+                    backed_up_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("""
+                INSERT INTO zero_duration_backup_hu012 (session_id, previous_status)
+                SELECT id, status FROM parking_sessions
+                WHERE status != 'VOID' AND entry_time IS NOT NULL AND exit_time IS NOT NULL
+                  AND exit_time >= entry_time
+                  AND exit_time < entry_time + INTERVAL '1 minute'
+                ON CONFLICT (session_id) DO NOTHING
+            """)
+            cur.execute("""
+                UPDATE parking_sessions session SET status = 'VOID'
+                FROM zero_duration_backup_hu012 backup
+                WHERE session.id = backup.session_id AND session.status != 'VOID'
+            """)
+            cur.execute("""
+                UPDATE detection_log SET match_status = 'DISMISSED'
+                WHERE linked_session_id IN (SELECT session_id FROM zero_duration_backup_hu012)
+            """)
 
 
 # ─────────────────────── vehículos activos ──────────────────────────────────
@@ -424,13 +464,111 @@ def is_valid_plate(plate: str) -> bool:
     return len(normalize_plate(plate)) == 6
 
 
+def plate_matches_exclusion(candidate: str, excluded: str, max_distance: int) -> bool:
+    return _levenshtein(
+        normalize_plate(candidate or ""), normalize_plate(excluded or "")
+    ) <= max_distance
+
+
+def is_zero_minute_duration(
+    entry_time: datetime.datetime, exit_time: datetime.datetime
+) -> bool:
+    return 0 < (exit_time - entry_time).total_seconds() < 60
+
+
+def _is_excluded(cur, normalized: str) -> bool:
+    cur.execute("""
+        SELECT normalized_plate, max_distance FROM plate_exclusions
+        WHERE active = true
+    """)
+    return any(
+        plate_matches_exclusion(normalized, row["normalized_plate"], row["max_distance"])
+        for row in cur.fetchall()
+    )
+
+
+def add_plate_exclusion(plate: str, max_distance: int, username: str) -> dict:
+    normalized = normalize_plate(plate)
+    if len(normalized) != 6:
+        raise ValueError("La patente excluida debe tener exactamente 6 caracteres")
+    if max_distance not in {0, 1, 2}:
+        raise ValueError("La distancia debe estar entre 0 y 2")
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO plate_exclusions
+                    (normalized_plate, max_distance, active, created_by)
+                VALUES (%s, %s, true, %s)
+                ON CONFLICT (normalized_plate) DO UPDATE
+                SET max_distance = EXCLUDED.max_distance, active = true,
+                    created_by = EXCLUDED.created_by
+            """, (normalized, max_distance, username))
+            cur.execute("""
+                SELECT id, normalized_plate FROM detection_log
+                WHERE match_status = 'UNMATCHED'
+            """)
+            ids = [
+                row["id"] for row in cur.fetchall()
+                if plate_matches_exclusion(
+                    row["normalized_plate"], normalized, max_distance
+                )
+            ]
+            if ids:
+                cur.execute("""
+                    UPDATE detection_log SET match_status = 'DISMISSED'
+                    WHERE id = ANY(%s)
+                """, (ids,))
+            cur.execute("""
+                SELECT id, plate, status FROM parking_sessions
+                WHERE status != 'VOID'
+            """)
+            matching_sessions = [
+                row for row in cur.fetchall()
+                if plate_matches_exclusion(row["plate"], normalized, max_distance)
+            ]
+            session_ids = [row["id"] for row in matching_sessions]
+            if session_ids:
+                cur.executemany("""
+                    INSERT INTO plate_exclusion_session_backup_hu012
+                        (session_id, previous_status)
+                    VALUES (%s, %s)
+                    ON CONFLICT (session_id) DO NOTHING
+                """, [(row["id"], row["status"]) for row in matching_sessions])
+                cur.execute("""
+                    UPDATE parking_sessions SET status = 'VOID'
+                    WHERE id = ANY(%s)
+                """, (session_ids,))
+                cur.execute("""
+                    UPDATE detection_log SET match_status = 'DISMISSED'
+                    WHERE linked_session_id = ANY(%s)
+                """, (session_ids,))
+            cur.execute("""
+                INSERT INTO audit_log (plate, event_type, details)
+                VALUES (NULL, 'PLATE_EXCLUDED', %s::jsonb)
+            """, (json.dumps({
+                "distance": max_distance,
+                "dismissed_count": len(ids),
+                "voided_sessions": len(session_ids),
+                "username": username,
+            }),))
+    return {
+        "max_distance": max_distance,
+        "dismissed_count": len(ids),
+        "voided_sessions": len(session_ids),
+    }
+
+
 def log_to_db(plate: str, action: str, status: str = "REAL",
               fee: float = 0, conf: float = 1.0, image_path: str = None,
               direction: str = "UNKNOWN", source: str = None):
     normalized = normalize_plate(plate)
-    match_status = "UNMATCHED" if len(normalized) == 6 else "INVALID_FORMAT"
     with _db() as conn:
         with conn.cursor() as cur:
+            match_status = (
+                "INVALID_FORMAT" if len(normalized) != 6
+                else "DISMISSED" if _is_excluded(cur, normalized)
+                else "UNMATCHED"
+            )
             cur.execute("""
                 INSERT INTO detection_log
                     (plate, normalized_plate, action, status, fee, confidence,
@@ -521,21 +659,26 @@ def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
         if item["match_type"] == "EXACT"
     ]
     reconciled = 0
+    duplicates = 0
     skipped = 0
     for item in proposals:
         try:
-            reconcile_detection_events(
+            result = reconcile_detection_events(
                 item["entry"]["detection_id"],
                 item["exit"]["detection_id"],
                 item["resolved_plate"],
                 match_type="EXACT",
             )
-            reconciled += 1
+            if result.get("status") == "DUPLICATE":
+                duplicates += 1
+            else:
+                reconciled += 1
         except (LookupError, ValueError):
             skipped += 1
     return {
         "date": date,
         "reconciled": reconciled,
+        "duplicates": duplicates,
         "skipped": skipped,
     }
 
@@ -812,6 +955,33 @@ def reconcile_detection_events(
                 raise ValueError("Las detecciones deben tener patentes normalizadas de 6 caracteres")
             if exit_event["logged_at"] <= entry["logged_at"]:
                 raise ValueError("La salida debe ser posterior a la entrada")
+            if is_zero_minute_duration(
+                entry["logged_at"], exit_event["logged_at"]
+            ):
+                cur.execute("""
+                    INSERT INTO parking_sessions
+                        (plate, entry_time, exit_time, is_event, event_fee, fee,
+                         entry_image_path, exit_image_path, source, status,
+                         entry_detection_id, exit_detection_id, match_type,
+                         match_confidence)
+                    VALUES (%s, %s, %s, false, NULL, 0, %s, %s,
+                            'manual', 'VOID', %s, %s, %s, 0)
+                    RETURNING id
+                """, (
+                    normalized, entry["logged_at"], exit_event["logged_at"],
+                    entry["image_path"], exit_event["image_path"],
+                    entry_detection_id, exit_detection_id, match_type,
+                ))
+                stay_id = int(cur.fetchone()["id"])
+                cur.execute("""
+                    UPDATE detection_log SET match_status = 'DISMISSED',
+                        linked_session_id = %s WHERE id IN (%s, %s)
+                """, (stay_id, entry_detection_id, exit_detection_id))
+                return {
+                    "stay_id": stay_id,
+                    "status": "DUPLICATE",
+                    "duration_minutes": 0,
+                }
 
             cur.execute(
                 "INSERT INTO vehicles (plate) VALUES (%s) ON CONFLICT (plate) DO NOTHING",

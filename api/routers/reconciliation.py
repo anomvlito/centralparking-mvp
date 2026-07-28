@@ -3,6 +3,7 @@ from api.auth import get_current_user, require_admin
 
 from api.schemas.reconciliation import (
     DetectionActionRequest,
+    PlateExclusionRequest,
     ReconcileStayRequest,
 )
 from api.services.reconciliation import (
@@ -11,6 +12,7 @@ from api.services.reconciliation import (
     list_stays,
     list_proposals,
     reconcile_exact,
+    create_plate_exclusion,
     reconcile_stay,
 )
 
@@ -95,5 +97,18 @@ async def auto_reconcile_exact(
 ):
     try:
         return reconcile_exact(date=date, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/api/plate-exclusions")
+async def exclude_plate(
+    request: PlateExclusionRequest,
+    user: dict = Depends(require_admin),
+):
+    try:
+        return create_plate_exclusion(
+            request.plate, request.max_distance, user["username"]
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
