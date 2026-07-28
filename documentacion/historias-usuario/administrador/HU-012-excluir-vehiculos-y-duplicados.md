@@ -1,10 +1,10 @@
 # HU-012 — Excluir vehículos operativos y descartar estadías duplicadas
 
 **Actor:** `administrador`
-**Estado:** `terminada`
-**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/done/exclusiones-evidencia-navegable.md)
+**Estado:** `en-progreso`
+**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/in-progress/exclusiones-evidencia-navegable.md)
 **Issue:** [#48](https://github.com/anomvlito/centralparking-mvp/issues/48)
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Done` / `Done`
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
 
 ## Historia
 
@@ -21,6 +21,8 @@ similares, descartar estadías de cero minutos y ampliar cualquier foto**, para
 - [x] Un backfill idempotente descarta pendientes históricos alcanzados.
 - [x] Una pareja con duración calculada de 0 minutos no crea una estadía útil:
   queda `VOID`, sus detecciones `DISMISSED` y se audita como duplicado.
+- [ ] Las propuestas exactas o fuzzy inferiores a 60 segundos se descartan
+  automáticamente antes de mostrarse y no reaparecen al recargar.
 - [x] Un backfill reversible anula sesiones de 0 minutos ya existentes sin
   borrar fotos o filas.
 - [x] Todas las imágenes del Dashboard se pueden pulsar para abrir un visor
@@ -70,3 +72,5 @@ es explícita, auditable y reversible. `VOID`/`DISMISSED` preservan evidencia.
 - Configuración privada aplicada sin publicar la patente: 90 detecciones
   descartadas y 39 sesiones excluidas anuladas; 1 sesión de duración inferior
   a un minuto anulada por el backfill reversible.
+- Reabierta el 2026-07-28: producción todavía mostraba propuestas fuzzy
+  inferiores a 60 segundos como `0 min`; corrección y nueva evidencia pendientes.
