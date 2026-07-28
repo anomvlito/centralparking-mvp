@@ -1,6 +1,6 @@
 # Feature — Estadías conciliadas desde detecciones particulares
 
-**Etapa Project 4:** `Done`
+**Etapa Project 4:** `In progress`
 **HUs:** [HU-004](../../historias-usuario/administrador/HU-004-backend-conciliacion-automatica-entradas-salidas.md), [HU-005](../../historias-usuario/administrador/HU-005-frontend-dashboard-tres-columnas-conciliacion.md)
 **Issues:** [#22](https://github.com/anomvlito/centralparking-mvp/issues/22), [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
 
