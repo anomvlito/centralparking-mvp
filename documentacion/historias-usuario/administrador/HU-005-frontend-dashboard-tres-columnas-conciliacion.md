@@ -1,8 +1,8 @@
 # HU-005 — Dashboard de 3 columnas para conciliar entradas y salidas
 
 **Actor:** `administrador`
-**Estado:** `implementada`
-**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/done/conciliacion-automatica-entradas-salidas.md)
+**Estado:** `en-progreso`
+**Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/in-progress/conciliacion-automatica-entradas-salidas.md)
 **Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
 **Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — cierre verificado después de producción
 **HU backend:** [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
@@ -51,6 +51,9 @@ dificultando corregir manualmente una clasificación equivocada.
 - [x] Existe un único selector de fecha operativa, iniciado en la fecha actual
   de `America/Santiago`; al cambiarlo se recargan columnas, triage y sesiones
   completas con el mismo valor `YYYY-MM-DD`.
+- [ ] Junto al selector existen controles para avanzar o retroceder exactamente
+  un día; el avance queda deshabilitado en la fecha operativa actual y el
+  selector manual tampoco acepta fechas futuras.
 - [x] Sin una acción explícita nunca se mezclan pendientes de todas las fechas.
 - [x] Una estadía completa pertenece al día consultado cuando su intervalo
   `[entry_time, exit_time]` se solapa con cualquier instante de ese día en
