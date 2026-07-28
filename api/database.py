@@ -515,6 +515,31 @@ def get_stay_proposals(date: str, limit: int = 200) -> list[dict]:
     return build_stay_proposals(list(unique.values()))[:max(1, min(limit, 200))]
 
 
+def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
+    proposals = [
+        item for item in get_stay_proposals(date=date, limit=limit)
+        if item["match_type"] == "EXACT"
+    ]
+    reconciled = 0
+    skipped = 0
+    for item in proposals:
+        try:
+            reconcile_detection_events(
+                item["entry"]["detection_id"],
+                item["exit"]["detection_id"],
+                item["resolved_plate"],
+                match_type="EXACT",
+            )
+            reconciled += 1
+        except (LookupError, ValueError):
+            skipped += 1
+    return {
+        "date": date,
+        "reconciled": reconciled,
+        "skipped": skipped,
+    }
+
+
 def promote_review_image(
     plate: str, image_path: str, detected_at: datetime.datetime, username: str
 ) -> dict:
@@ -758,6 +783,7 @@ def reconcile_detection_events(
     entry_detection_id: int,
     exit_detection_id: int,
     resolved_plate: str,
+    match_type: str = "MANUAL",
 ) -> dict:
     if entry_detection_id == exit_detection_id:
         raise ValueError("Entrada y salida deben ser detecciones distintas")
@@ -801,12 +827,12 @@ def reconcile_detection_events(
                      entry_detection_id, exit_detection_id, match_type,
                      match_confidence)
                 VALUES (%s, %s, %s, false, NULL, 0, %s, %s,
-                        'manual', 'REAL', %s, %s, 'MANUAL', %s)
+                        'manual', 'REAL', %s, %s, %s, %s)
                 RETURNING id
             """, (
                 normalized, entry["logged_at"], exit_event["logged_at"],
                 entry["image_path"], exit_event["image_path"],
-                entry_detection_id, exit_detection_id, confidence,
+                entry_detection_id, exit_detection_id, match_type, confidence,
             ))
             stay_id = int(cur.fetchone()["id"])
             cur.execute("""
@@ -830,7 +856,7 @@ def reconcile_detection_events(
                     "stay_id": stay_id,
                     "entry_detection_id": entry_detection_id,
                     "exit_detection_id": exit_detection_id,
-                    "match_type": "MANUAL",
+                    "match_type": match_type,
                 }),
             ))
 
