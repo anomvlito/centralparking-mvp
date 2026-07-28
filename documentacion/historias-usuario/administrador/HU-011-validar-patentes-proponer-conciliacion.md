@@ -1,8 +1,8 @@
 # HU-011 — Validar patentes y proponer conciliaciones revisables
 
 **Actor:** `administrador`
-**Estado:** `en-progreso`
-**Feature relacionada:** [Matching revisable de detecciones](../../features/in-progress/matching-revisable-detecciones.md)
+**Estado:** `implementada`
+**Feature relacionada:** [Matching revisable de detecciones](../../features/done/matching-revisable-detecciones.md)
 **Issue:** [#43](https://github.com/anomvlito/centralparking-mvp/issues/43)
 **Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — cierre verificado después de producción
 
@@ -24,9 +24,9 @@ tienen una patente resuelta ni `DetectionEvent`.
 
 ## Criterios de aceptación
 
-- [ ] Los pares `EXACT` de seis caracteres se concilian automáticamente,
+- [x] Los pares `EXACT` de seis caracteres se concilian automáticamente,
   transaccionalmente y una sola vez; no requieren confirmación humana.
-- [ ] Sólo los pares `FUZZY` permanecen como propuestas revisables.
+- [x] Sólo los pares `FUZZY` permanecen como propuestas revisables.
 - [x] La normalización elimina símbolos y exige exactamente seis caracteres
   alfanuméricos.
 - [x] Una lectura inválida queda `INVALID_FORMAT`, conserva imagen, timestamp,
@@ -108,7 +108,16 @@ y recuperación manual de evidencia. No se elimina historial.
 ## Evidencia de implementación
 
 - Reapertura 2026-07-28: el usuario confirmó que coincidencias exactas deben
-  convertirse automáticamente en estadías; evidencia pendiente.
+  convertirse automáticamente en estadías.
+- Corrección backend: commit `1fb445e`,
+  [PR #46](https://github.com/anomvlito/centralparking-mvp/pull/46),
+  merge `f17c2b37cc0f9fc8a0f41a0a7082d4ad39b350ca`, deploy
+  [30395460865](https://github.com/anomvlito/centralparking-mvp/actions/runs/30395460865).
+- Corrección frontend: commit `e5a5da2`,
+  [PR #10](https://github.com/anomvlito/adyac-camaras-frontend/pull/10),
+  merge `ae9c5eb32e3e251d79df2dbac36dfc6bc14fc8c8`.
+- Ejecución productiva: 141 parejas exactas conciliadas, 0 omitidas,
+  0 exactas restantes y 37 fuzzy reservadas para revisión.
 
 - Backend/documentación: commits `d2d1e06` y `8fd0317`,
   [PR #44](https://github.com/anomvlito/centralparking-mvp/pull/44),
