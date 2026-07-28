@@ -964,6 +964,10 @@ def reconcile_detection_events(
                 raise ValueError("Las detecciones deben tener patentes normalizadas de 6 caracteres")
             if exit_event["logged_at"] <= entry["logged_at"]:
                 raise ValueError("La salida debe ser posterior a la entrada")
+            cur.execute(
+                "INSERT INTO vehicles (plate) VALUES (%s) ON CONFLICT (plate) DO NOTHING",
+                (normalized,),
+            )
             if is_zero_minute_duration(
                 entry["logged_at"], exit_event["logged_at"]
             ):
@@ -992,10 +996,6 @@ def reconcile_detection_events(
                     "duration_minutes": 0,
                 }
 
-            cur.execute(
-                "INSERT INTO vehicles (plate) VALUES (%s) ON CONFLICT (plate) DO NOTHING",
-                (normalized,),
-            )
             confidence = min(
                 float(entry["confidence"]), float(exit_event["confidence"])
             )

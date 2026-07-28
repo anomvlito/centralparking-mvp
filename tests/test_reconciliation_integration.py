@@ -21,7 +21,7 @@ class ReconciliationIntegrationTests(unittest.TestCase):
     una aserción falla.
     """
 
-    PLATE = "TESTFX99"
+    PLATE = "TSTX99"
 
     def setUp(self):
         from api.database import _db
@@ -94,6 +94,35 @@ class ReconciliationIntegrationTests(unittest.TestCase):
                     (self.PLATE,),
                 )
                 self.assertEqual(cur.fetchone()["event_type"], "STAY_RECONCILED")
+
+    def test_zero_minute_reconciliation_preserves_void_evidence(self):
+        from api.database import reconcile_detection_events
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.entry_id = self._insert_detection(now - datetime.timedelta(seconds=30))
+        self.exit_id = self._insert_detection(now)
+
+        result = reconcile_detection_events(
+            self.entry_id, self.exit_id, self.PLATE, match_type="FUZZY"
+        )
+        self.stay_id = result["stay_id"]
+
+        with self._db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status FROM parking_sessions WHERE id = %s",
+                    (self.stay_id,),
+                )
+                self.assertEqual(cur.fetchone()["status"], "VOID")
+                cur.execute(
+                    "SELECT match_status FROM detection_log "
+                    "WHERE id IN (%s, %s) ORDER BY id",
+                    (self.entry_id, self.exit_id),
+                )
+                self.assertEqual(
+                    [row["match_status"] for row in cur.fetchall()],
+                    ["DISMISSED", "DISMISSED"],
+                )
 
 
 if __name__ == "__main__":
