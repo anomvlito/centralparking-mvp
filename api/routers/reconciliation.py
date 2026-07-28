@@ -10,6 +10,7 @@ from api.services.reconciliation import (
     list_detections,
     list_stays,
     list_proposals,
+    reconcile_exact,
     reconcile_stay,
 )
 
@@ -82,5 +83,17 @@ async def proposals(
 ):
     try:
         return list_proposals(date=date, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/api/stays/auto-reconcile-exact")
+async def auto_reconcile_exact(
+    date: str,
+    limit: int = Query(200, ge=1, le=200),
+    _: dict = Depends(require_admin),
+):
+    try:
+        return reconcile_exact(date=date, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

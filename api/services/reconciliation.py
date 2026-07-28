@@ -1,4 +1,5 @@
 from api.database import (
+    auto_reconcile_exact_matches,
     dismiss_detection_event,
     get_detection_events,
     get_parking_stays,
@@ -21,6 +22,9 @@ def list_stays(limit=100, status=None, date=None, plate=None):
 
 def list_proposals(date, limit=100):
     return get_stay_proposals(date=date, limit=limit)
+
+def reconcile_exact(date, limit=200):
+    return auto_reconcile_exact_matches(date=date, limit=limit)
 
 
 def reconcile_stay(request: ReconcileStayRequest):
