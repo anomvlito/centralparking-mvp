@@ -26,6 +26,9 @@ similares, descartar estadías de cero minutos y ampliar cualquier foto**, para
 - [ ] Una pareja mostrada como `0 min` o `1 min` se considera captura repetida:
   la primera detección permanece `UNMATCHED` como entrada pendiente y sólo la
   segunda queda `DISMISSED`; ambas evidencias se conservan.
+- [ ] Si la segunda captura ya era la entrada de una estadía válida, esa
+  estadía adopta la primera captura como entrada, conserva su salida y descarta
+  la repetición; no queda una entrada pendiente adicional.
 - [x] Un backfill reversible anula sesiones de 0 minutos ya existentes sin
   borrar fotos o filas.
 - [x] Todas las imágenes del Dashboard se pueden pulsar para abrir un visor

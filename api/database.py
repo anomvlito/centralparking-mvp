@@ -718,7 +718,80 @@ def get_stay_proposals(
     return proposals[:max(1, min(limit, 200))]
 
 
+def consolidate_short_entry_duplicates(
+    date: str, session_id: int | None = None
+) -> int:
+    day_start, day_end = _operational_day_bounds(date)
+    consolidated = 0
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT stay.id session_id,
+                       stay.entry_detection_id current_entry_id,
+                       current_entry.normalized_plate current_plate,
+                       candidate.id candidate_id,
+                       candidate.normalized_plate candidate_plate,
+                       candidate.logged_at candidate_time,
+                       candidate.image_path candidate_image
+                FROM parking_sessions stay
+                JOIN detection_log current_entry
+                  ON current_entry.id = stay.entry_detection_id
+                JOIN detection_log candidate
+                  ON candidate.match_status = 'UNMATCHED'
+                 AND candidate.logged_at >= stay.entry_time - INTERVAL '2 minutes'
+                 AND candidate.logged_at < stay.entry_time
+                WHERE stay.status != 'VOID'
+                  AND stay.entry_time >= %s
+                  AND stay.entry_time < %s
+                  AND (%s IS NULL OR stay.id = %s)
+                ORDER BY stay.id, candidate.logged_at DESC, candidate.id DESC
+                FOR UPDATE OF stay, current_entry, candidate
+            """, (day_start, day_end, session_id, session_id))
+            seen_sessions: set[int] = set()
+            for row in cur.fetchall():
+                session_id = int(row["session_id"])
+                if session_id in seen_sessions:
+                    continue
+                if _levenshtein(
+                    row["current_plate"], row["candidate_plate"]
+                ) > 1:
+                    continue
+                seen_sessions.add(session_id)
+                cur.execute("""
+                    UPDATE detection_log
+                    SET match_status = 'DISMISSED'
+                    WHERE id = %s
+                """, (row["current_entry_id"],))
+                cur.execute("""
+                    UPDATE detection_log
+                    SET match_status = 'MATCHED_ENTRY',
+                        linked_session_id = %s
+                    WHERE id = %s
+                """, (session_id, row["candidate_id"]))
+                cur.execute("""
+                    UPDATE parking_sessions
+                    SET entry_detection_id = %s,
+                        entry_time = %s,
+                        entry_image_path = %s
+                    WHERE id = %s
+                """, (
+                    row["candidate_id"], row["candidate_time"],
+                    row["candidate_image"], session_id,
+                ))
+                cur.execute("""
+                    INSERT INTO audit_log (plate, event_type, details)
+                    VALUES (NULL, 'ENTRY_DEDUPED', %s::jsonb)
+                """, (json.dumps({
+                    "session_id": session_id,
+                    "kept_detection_id": int(row["candidate_id"]),
+                    "dismissed_detection_id": int(row["current_entry_id"]),
+                }),))
+                consolidated += 1
+    return consolidated
+
+
 def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
+    entry_duplicates = consolidate_short_entry_duplicates(date)
     proposals = [
         item for item in get_stay_proposals(
             date=date, limit=limit, include_duplicate_duration=True
@@ -746,6 +819,7 @@ def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
         "date": date,
         "reconciled": reconciled,
         "duplicates": duplicates,
+        "entry_duplicates": entry_duplicates,
         "skipped": skipped,
     }
 
