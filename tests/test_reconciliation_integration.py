@@ -95,17 +95,18 @@ class ReconciliationIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(cur.fetchone()["event_type"], "STAY_RECONCILED")
 
-    def test_zero_minute_reconciliation_preserves_void_evidence(self):
+    def test_one_minute_duplicate_keeps_first_detection_pending(self):
         from api.database import reconcile_detection_events
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        self.entry_id = self._insert_detection(now - datetime.timedelta(seconds=30))
+        self.entry_id = self._insert_detection(now - datetime.timedelta(seconds=90))
         self.exit_id = self._insert_detection(now)
 
         result = reconcile_detection_events(
             self.entry_id, self.exit_id, self.PLATE, match_type="FUZZY"
         )
         self.stay_id = result["stay_id"]
+        self.assertEqual(result["duration_minutes"], 1)
 
         with self._db() as conn:
             with conn.cursor() as cur:
@@ -115,13 +116,16 @@ class ReconciliationIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(cur.fetchone()["status"], "VOID")
                 cur.execute(
-                    "SELECT match_status FROM detection_log "
+                    "SELECT match_status, linked_session_id FROM detection_log "
                     "WHERE id IN (%s, %s) ORDER BY id",
                     (self.entry_id, self.exit_id),
                 )
                 self.assertEqual(
-                    [row["match_status"] for row in cur.fetchall()],
-                    ["DISMISSED", "DISMISSED"],
+                    [
+                        (row["match_status"], row["linked_session_id"])
+                        for row in cur.fetchall()
+                    ],
+                    [("UNMATCHED", None), ("DISMISSED", self.stay_id)],
                 )
 
 
