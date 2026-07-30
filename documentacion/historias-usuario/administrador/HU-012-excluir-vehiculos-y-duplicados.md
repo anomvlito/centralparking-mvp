@@ -1,10 +1,10 @@
 # HU-012 — Excluir vehículos operativos y descartar estadías duplicadas
 
 **Actor:** `administrador`
-**Estado:** `en-progreso`
-**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/in-progress/exclusiones-evidencia-navegable.md)
+**Estado:** `implementada`
+**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/done/exclusiones-evidencia-navegable.md)
 **Issue:** [#48](https://github.com/anomvlito/centralparking-mvp/issues/48)
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Done` / `Done`
 
 ## Historia
 
@@ -23,10 +23,10 @@ similares, descartar estadías de cero minutos y ampliar cualquier foto**, para
   queda `VOID`, sus detecciones `DISMISSED` y se audita como duplicado.
 - [x] Las propuestas exactas o fuzzy inferiores a 60 segundos se descartan
   automáticamente antes de mostrarse y no reaparecen al recargar.
-- [ ] Una pareja mostrada como `0 min` o `1 min` se considera captura repetida:
+- [x] Una pareja mostrada como `0 min` o `1 min` se considera captura repetida:
   la primera detección permanece `UNMATCHED` como entrada pendiente y sólo la
   segunda queda `DISMISSED`; ambas evidencias se conservan.
-- [ ] Si la segunda captura ya era la entrada de una estadía válida, esa
+- [x] Si la segunda captura ya era la entrada de una estadía válida, esa
   estadía adopta la primera captura como entrada, conserva su salida y descarta
   la repetición; no queda una entrada pendiente adicional.
 - [x] Un backfill reversible anula sesiones de 0 minutos ya existentes sin
@@ -87,3 +87,13 @@ es explícita, auditable y reversible. `VOID`/`DISMISSED` preservan evidencia.
   14 propuestas de duración válida.
 - Verificación final: 18 pruebas unitarias/contrato, 2 pruebas PostgreSQL,
   `compileall`, servicio activo y `/docs` HTTP 200.
+- Caso borde `1 min`: backend PR
+  [#56](https://github.com/anomvlito/centralparking-mvp/pull/56) conserva la
+  primera detección y descarta la repetición; PR
+  [#57](https://github.com/anomvlito/centralparking-mvp/pull/57) consolida esa
+  primera captura cuando la repetición ya pertenecía a una estadía válida.
+- Verificación productiva anonimizada del 2026-07-27: la primera captura quedó
+  `MATCHED_ENTRY` en la estadía `REAL` y las repeticiones del minuto siguiente
+  quedaron `DISMISSED`, sin entrada pendiente adicional.
+- Regresión final: 18 pruebas unitarias/contrato, 3 pruebas PostgreSQL,
+  `compileall`, deploy VPS correcto y health HTTP 200.
