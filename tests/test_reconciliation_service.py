@@ -89,9 +89,11 @@ class ReconciliationServiceTests(unittest.TestCase):
 
     @patch("api.database.get_stay_proposals")
     @patch("api.database.reconcile_detection_events")
+    @patch("api.database.consolidate_short_entry_duplicates")
     def test_auto_reconciliation_discards_one_minute_fuzzy_proposal(
-        self, reconcile, get_proposals
+        self, consolidate, reconcile, get_proposals
     ):
+        consolidate.return_value = 0
         get_proposals.return_value = [{
             "entry": {"detection_id": 1},
             "exit": {"detection_id": 2},
@@ -104,6 +106,7 @@ class ReconciliationServiceTests(unittest.TestCase):
         result = auto_reconcile_exact_matches("2026-07-28")
 
         self.assertEqual(result["duplicates"], 1)
+        self.assertEqual(result["entry_duplicates"], 0)
         reconcile.assert_called_once_with(1, 2, "ABC123", match_type="FUZZY")
         get_proposals.assert_called_once_with(
             date="2026-07-28", limit=200, include_duplicate_duration=True

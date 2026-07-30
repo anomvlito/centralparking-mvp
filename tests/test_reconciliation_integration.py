@@ -34,6 +34,13 @@ class ReconciliationIntegrationTests(unittest.TestCase):
     def tearDown(self):
         with self._db() as conn:
             with conn.cursor() as cur:
+                if self.stay_id is not None:
+                    cur.execute(
+                        "DELETE FROM audit_log "
+                        "WHERE event_type = 'ENTRY_DEDUPED' "
+                        "AND details->>'session_id' = %s",
+                        (str(self.stay_id),),
+                    )
                 cur.execute(
                     "UPDATE detection_log SET linked_session_id = NULL "
                     "WHERE plate = %s",
@@ -126,6 +133,56 @@ class ReconciliationIntegrationTests(unittest.TestCase):
                         for row in cur.fetchall()
                     ],
                     [("UNMATCHED", None), ("DISMISSED", self.stay_id)],
+                )
+
+    def test_earlier_duplicate_replaces_entry_of_existing_stay(self):
+        from api.database import consolidate_short_entry_duplicates
+        from api.database import reconcile_detection_events
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        current_entry = self._insert_detection(
+            now - datetime.timedelta(minutes=10)
+        )
+        self.exit_id = self._insert_detection(now - datetime.timedelta(minutes=2))
+        result = reconcile_detection_events(
+            current_entry, self.exit_id, self.PLATE
+        )
+        self.stay_id = result["stay_id"]
+        self.entry_id = self._insert_detection(
+            now - datetime.timedelta(minutes=11)
+        )
+
+        count = consolidate_short_entry_duplicates(
+            now.astimezone(
+                datetime.timezone(datetime.timedelta(hours=-4))
+            ).date().isoformat(),
+            session_id=self.stay_id,
+        )
+
+        self.assertEqual(count, 1)
+        with self._db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT entry_detection_id FROM parking_sessions WHERE id = %s",
+                    (self.stay_id,),
+                )
+                self.assertEqual(
+                    cur.fetchone()["entry_detection_id"], self.entry_id
+                )
+                cur.execute(
+                    "SELECT id, match_status, linked_session_id "
+                    "FROM detection_log WHERE id IN (%s, %s) ORDER BY id",
+                    (current_entry, self.entry_id),
+                )
+                states = {row["id"]: row for row in cur.fetchall()}
+                self.assertEqual(
+                    states[current_entry]["match_status"], "DISMISSED"
+                )
+                self.assertEqual(
+                    states[self.entry_id]["match_status"], "MATCHED_ENTRY"
+                )
+                self.assertEqual(
+                    states[self.entry_id]["linked_session_id"], self.stay_id
                 )
 
 
