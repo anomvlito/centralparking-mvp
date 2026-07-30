@@ -1,10 +1,10 @@
 # HU-012 — Excluir vehículos operativos y descartar estadías duplicadas
 
 **Actor:** `administrador`
-**Estado:** `implementada`
-**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/done/exclusiones-evidencia-navegable.md)
+**Estado:** `en-progreso`
+**Feature relacionada:** [Exclusiones y evidencia navegable](../../features/in-progress/exclusiones-evidencia-navegable.md)
 **Issue:** [#48](https://github.com/anomvlito/centralparking-mvp/issues/48)
-**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `Done` / `Done`
+**Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — `In progress` / `In Progress`
 
 ## Historia
 
@@ -23,6 +23,9 @@ similares, descartar estadías de cero minutos y ampliar cualquier foto**, para
   queda `VOID`, sus detecciones `DISMISSED` y se audita como duplicado.
 - [x] Las propuestas exactas o fuzzy inferiores a 60 segundos se descartan
   automáticamente antes de mostrarse y no reaparecen al recargar.
+- [ ] Una pareja mostrada como `0 min` o `1 min` se considera captura repetida:
+  la primera detección permanece `UNMATCHED` como entrada pendiente y sólo la
+  segunda queda `DISMISSED`; ambas evidencias se conservan.
 - [x] Un backfill reversible anula sesiones de 0 minutos ya existentes sin
   borrar fotos o filas.
 - [x] Todas las imágenes del Dashboard se pueden pulsar para abrir un visor
@@ -55,7 +58,7 @@ es explícita, auditable y reversible. `VOID`/`DISMISSED` preservan evidencia.
 
 - Exacta, distancia 1 y distancia 2.
 - Backfill idempotente.
-- Duración 0 versus 1 minuto.
+- Duración mostrada 0/1 versus 2 minutos.
 - Evidencia intacta y sesión `VOID`.
 - Auth 401/403.
 - Visor para estadía, detección y revisión; teclado y mobile.

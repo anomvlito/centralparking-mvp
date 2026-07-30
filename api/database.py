@@ -231,6 +231,14 @@ def init_db():
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS duplicate_session_backup_hu012 (
+                    session_id BIGINT PRIMARY KEY REFERENCES parking_sessions(id),
+                    entry_detection_id BIGINT NOT NULL,
+                    exit_detection_id BIGINT NOT NULL,
+                    backed_up_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("""
                 INSERT INTO zero_duration_backup_hu012 (session_id, previous_status)
                 SELECT id, status FROM parking_sessions
                 WHERE status != 'VOID' AND entry_time IS NOT NULL AND exit_time IS NOT NULL
@@ -245,7 +253,57 @@ def init_db():
             """)
             cur.execute("""
                 UPDATE detection_log SET match_status = 'DISMISSED'
-                WHERE linked_session_id IN (SELECT session_id FROM zero_duration_backup_hu012)
+                WHERE linked_session_id IN (
+                    SELECT session_id FROM zero_duration_backup_hu012
+                )
+            """)
+            cur.execute("""
+                UPDATE detection_log detection
+                SET match_status = 'UNMATCHED', linked_session_id = NULL
+                FROM parking_sessions session
+                JOIN zero_duration_backup_hu012 backup
+                  ON backup.session_id = session.id
+                WHERE detection.id = session.entry_detection_id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM plate_exclusion_session_backup_hu012 excluded
+                    WHERE excluded.session_id = session.id
+                  )
+            """)
+            cur.execute("""
+                INSERT INTO duplicate_session_backup_hu012
+                    (session_id, entry_detection_id, exit_detection_id)
+                SELECT session.id, session.entry_detection_id,
+                       session.exit_detection_id
+                FROM parking_sessions session
+                WHERE session.status = 'VOID'
+                  AND session.source = 'manual'
+                  AND session.entry_detection_id IS NOT NULL
+                  AND session.exit_detection_id IS NOT NULL
+                  AND session.entry_time IS NOT NULL
+                  AND session.exit_time > session.entry_time
+                  AND session.exit_time < session.entry_time + INTERVAL '2 minutes'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM zero_duration_backup_hu012 existing
+                    WHERE existing.session_id = session.id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM plate_exclusion_session_backup_hu012 excluded
+                    WHERE excluded.session_id = session.id
+                  )
+                ON CONFLICT (session_id) DO NOTHING
+            """)
+            cur.execute("""
+                UPDATE detection_log detection
+                SET match_status = 'UNMATCHED', linked_session_id = NULL
+                FROM duplicate_session_backup_hu012 duplicate
+                WHERE detection.id = duplicate.entry_detection_id
+            """)
+            cur.execute("""
+                UPDATE detection_log detection
+                SET match_status = 'DISMISSED',
+                    linked_session_id = duplicate.session_id
+                FROM duplicate_session_backup_hu012 duplicate
+                WHERE detection.id = duplicate.exit_detection_id
             """)
 
 
@@ -470,10 +528,10 @@ def plate_matches_exclusion(candidate: str, excluded: str, max_distance: int) ->
     ) <= max_distance
 
 
-def is_zero_minute_duration(
+def is_duplicate_duration(
     entry_time: datetime.datetime, exit_time: datetime.datetime
 ) -> bool:
-    return 0 < (exit_time - entry_time).total_seconds() < 60
+    return 0 < (exit_time - entry_time).total_seconds() < 120
 
 
 def _is_excluded(cur, normalized: str) -> bool:
@@ -643,7 +701,7 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
 
 
 def get_stay_proposals(
-    date: str, limit: int = 200, include_zero_duration: bool = False
+    date: str, limit: int = 200, include_duplicate_duration: bool = False
 ) -> list[dict]:
     day_start, _ = _operational_day_bounds(date)
     previous_date = (day_start.date() - datetime.timedelta(days=1)).isoformat()
@@ -653,9 +711,9 @@ def get_stay_proposals(
     )
     unique = {event["detection_id"]: event for event in events}
     proposals = build_stay_proposals(list(unique.values()))
-    if not include_zero_duration:
+    if not include_duplicate_duration:
         proposals = [
-            item for item in proposals if item["duration_minutes"] > 0
+            item for item in proposals if item["duration_minutes"] > 1
         ]
     return proposals[:max(1, min(limit, 200))]
 
@@ -663,9 +721,9 @@ def get_stay_proposals(
 def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
     proposals = [
         item for item in get_stay_proposals(
-            date=date, limit=limit, include_zero_duration=True
+            date=date, limit=limit, include_duplicate_duration=True
         )
-        if item["match_type"] == "EXACT" or item["duration_minutes"] == 0
+        if item["match_type"] == "EXACT" or item["duration_minutes"] <= 1
     ]
     reconciled = 0
     duplicates = 0
@@ -968,7 +1026,7 @@ def reconcile_detection_events(
                 "INSERT INTO vehicles (plate) VALUES (%s) ON CONFLICT (plate) DO NOTHING",
                 (normalized,),
             )
-            if is_zero_minute_duration(
+            if is_duplicate_duration(
                 entry["logged_at"], exit_event["logged_at"]
             ):
                 cur.execute("""
@@ -987,13 +1045,17 @@ def reconcile_detection_events(
                 ))
                 stay_id = int(cur.fetchone()["id"])
                 cur.execute("""
-                    UPDATE detection_log SET match_status = 'DISMISSED',
-                        linked_session_id = %s WHERE id IN (%s, %s)
-                """, (stay_id, entry_detection_id, exit_detection_id))
+                    UPDATE detection_log
+                    SET match_status = 'DISMISSED', linked_session_id = %s
+                    WHERE id = %s
+                """, (stay_id, exit_detection_id))
                 return {
                     "stay_id": stay_id,
                     "status": "DUPLICATE",
-                    "duration_minutes": 0,
+                    "duration_minutes": int(
+                        (exit_event["logged_at"] - entry["logged_at"])
+                        .total_seconds() // 60
+                    ),
                 }
 
             confidence = min(
