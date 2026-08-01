@@ -217,6 +217,18 @@ class ReconciliationServiceTests(unittest.TestCase):
         self.assertEqual(result["match_status"], "DISMISSED")
         dismiss.assert_called_once_with(12)
 
+    @patch.object(reconciliation, "set_detection_direction")
+    def test_set_direction_delegates_to_repository(self, set_direction):
+        set_direction.return_value = {
+            "detection_id": 13,
+            "direction": "APPROACHING",
+        }
+
+        result = reconciliation.set_direction(13, "APPROACHING")
+
+        self.assertEqual(result["direction"], "APPROACHING")
+        set_direction.assert_called_once_with(13, "APPROACHING")
+
 
 if __name__ == "__main__":
     unittest.main()

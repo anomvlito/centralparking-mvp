@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ReconcileStayRequest(BaseModel):
@@ -10,7 +10,14 @@ class ReconcileStayRequest(BaseModel):
 
 
 class DetectionActionRequest(BaseModel):
-    action: Literal["dismiss"]
+    action: Literal["dismiss", "set_direction"]
+    direction: Optional[Literal["APPROACHING", "DEPARTING"]] = None
+
+    @model_validator(mode="after")
+    def _require_direction_for_set_direction(self) -> "DetectionActionRequest":
+        if self.action == "set_direction" and self.direction is None:
+            raise ValueError("direction is required when action is set_direction")
+        return self
 
 
 class PlateExclusionRequest(BaseModel):

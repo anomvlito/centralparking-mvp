@@ -1200,6 +1200,28 @@ def dismiss_detection_event(detection_id: int) -> dict:
     return {"detection_id": detection_id, "match_status": "DISMISSED"}
 
 
+def set_detection_direction(detection_id: int, direction: str) -> dict:
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE detection_log
+                SET direction = %s
+                WHERE id = %s AND direction = 'UNKNOWN'
+                RETURNING id
+            """, (direction, detection_id))
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "SELECT direction FROM detection_log WHERE id = %s",
+                    (detection_id,),
+                )
+                existing = cur.fetchone()
+                if not existing:
+                    raise LookupError("Detección no encontrada")
+                raise ValueError("La detección ya tiene una dirección resuelta")
+    return {"detection_id": detection_id, "direction": direction}
+
+
 def get_history(limit: int = 200, date: str = None) -> list:
     """Lee desde parking_sessions como fuente de verdad: 0 duplicados por diseño."""
     with _db() as conn:
