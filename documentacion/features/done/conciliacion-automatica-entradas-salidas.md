@@ -47,8 +47,24 @@ La reapertura de 2026-07-28 exige además fecha inicial de Chile, ausencia de
 mezcla histórica implícita, selección manual de rol en toda detección y
 estadías nocturnas visibles en cada día que solapen.
 
+La reapertura de 2026-07-31 exige además que clasificar manualmente una
+detección `UNKNOWN` como entrada/salida persista su `direction` real
+(`PATCH /api/detections/{id}` con `action: "set_direction"`) y mueva la
+tarjeta a la columna de pendientes correspondiente, para que la conciliación
+automática existente la tome en su próximo ciclo. Esto invierte, sólo para el
+caso `UNKNOWN`, el guardrail "ninguna detección incierta produce... acceso"
+en su lectura estricta de "la dirección es ayuda visual y nunca autoridad":
+la corrección manual sí queda como autoridad sobre `direction`, aunque sigue
+sin producir cobro, sanción ni acceso por sí sola.
+
 ## Evidencia
 
+- Dirección manual persistida al clasificar UNKNOWN: backend
+  [PR #59](https://github.com/anomvlito/centralparking-mvp/pull/59), deploy
+  [30709705482](https://github.com/anomvlito/centralparking-mvp/actions/runs/30709705482);
+  frontend
+  [PR #13](https://github.com/anomvlito/adyac-camaras-frontend/pull/13),
+  Vercel Production y smoke HTTP 200.
 - Fecha operativa y conciliación accesible: backend
   [PR #41](https://github.com/anomvlito/centralparking-mvp/pull/41),
   deploy

@@ -3,7 +3,8 @@
 **Actor:** `administrador`
 **Estado:** `implementada`
 **Feature relacionada:** [Estadías conciliadas desde detecciones](../../features/done/conciliacion-automatica-entradas-salidas.md)
-**Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23)
+**Issue:** [#23](https://github.com/anomvlito/centralparking-mvp/issues/23) — reabierto para esta
+reapertura, ver evidencia abajo.
 **Project 4:** [Central Parking — Orquestación](https://github.com/users/anomvlito/projects/4) — cierre verificado después de producción
 **HU backend:** [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
 
@@ -45,6 +46,45 @@ de salida mediante `COALESCE(exit_time, entry_time)`. Una estadía nocturna no
 aparecía al revisar el día de entrada. La barra de conciliación quedaba al
 final de la página y las columnas dirigidas ocultaban la acción contraria,
 dificultando corregir manualmente una clasificación equivocada.
+
+## Reapertura (2026-07-31): mover a pendientes al clasificar manualmente
+
+**Reconciliación de un hallazgo ya resuelto:** la sección "Riesgos y datos"
+de esta HU documenta que `direction` siempre valía `UNKNOWN` en producción
+por un gap de wiring entre `staging.py` y `detection_log`. Ese gap está
+resuelto desde el commit `07f3a58a` (2026-07-24, HU-010 "Activar el
+clasificador vertical con evidencia suficiente", `implementada`): el
+clasificador vertical automático ya escribe `direction` real cuando tiene
+evidencia suficiente. En consecuencia, hoy columnas 1 y 2 sí reciben
+detecciones reales y la franja de triage sólo concentra los casos donde el
+clasificador automático no tuvo evidencia suficiente o la trayectoria fue
+ambigua — ya no el 100% del tráfico. Esta reapertura actualiza esa sección
+más abajo para reflejar el estado real.
+
+**Nueva historia de esta reapertura:** Como **administrador**, quiero que al
+resolver manualmente una detección de la franja de triage (`direction:
+"UNKNOWN"`) con los botones `Entrada`/`Salida`, la tarjeta se mueva a
+la columna de pendientes correspondiente (Entradas pendientes o Salidas
+pendientes), para que la conciliación automática existente
+(`auto_reconcile_exact_matches`, disparada en cada carga) la tome en su
+próximo ciclo sin pasos adicionales.
+
+Hoy esos mismos botones sobre una tarjeta de triage sólo la seleccionan para
+la barra de conciliación manual local (`markAsEntry`/`markAsExit`); nunca
+escriben `direction` en el backend. Con [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
+(reapertura, `PATCH /api/detections/{id}` con `action: "set_direction"`)
+disponible, esta reapertura hace que esos mismos botones, **sólo cuando la
+tarjeta es de triage (`direction === "UNKNOWN"`)**, además persistan la
+dirección elegida antes o junto con la selección local. Esto invierte, sólo
+para el caso `UNKNOWN`, el criterio shippeado más abajo "la dirección es
+ayuda visual y nunca autoridad": a partir de esta reapertura, resolver
+manualmente una detección incierta sí fija su `direction` real, tal como si
+el clasificador automático la hubiera resuelto. El resto de esa garantía no
+cambia — ninguna detección se convierte en cobro, sanción o acceso por su
+`direction`, y sobre una tarjeta ya resuelta (columna 1 o 2) los botones
+siguen comportándose exactamente igual que hoy (sólo selección local para la
+barra de conciliación, sin escritura al backend — el propio backend
+rechazaría con `409` un intento de sobrescribir una dirección ya resuelta).
 
 ## Criterios de aceptación
 
@@ -88,6 +128,30 @@ dificultando corregir manualmente una clasificación equivocada.
 - [x] El layout se adapta sin huecos ni columnas rotas en desktop y mobile
   (1 columna en mobile, 3 en desktop).
 
+### Reapertura: mover a pendientes al clasificar manualmente
+
+- [x] En la franja de triage, hacer clic en `Entrada` o `Salida` sobre
+  una tarjeta `direction === "UNKNOWN"` llama a
+  `PATCH /api/detections/{id}` con `action: "set_direction"` y la dirección
+  correspondiente (`APPROACHING` para entrada, `DEPARTING` para salida),
+  además de conservar la selección local existente para la barra de
+  conciliación manual.
+- [x] Tras una respuesta exitosa, la tarjeta refleja de inmediato (sin
+  esperar el próximo polling) su nueva `direction` en el estado local y
+  aparece en la columna de pendientes correspondiente (1 o 2) en vez de la
+  franja de triage.
+- [x] Si el `PATCH` falla (409, 404, error de red), la tarjeta permanece en
+  la franja de triage, se muestra un error visible y la selección local para
+  la barra de conciliación no se pierde.
+- [x] Sobre una tarjeta que ya está en columna 1 o columna 2 (`direction`
+  distinta de `UNKNOWN`), los botones `Entrada`/`Salida` no llaman al
+  nuevo `PATCH`: sólo actualizan la selección local, igual que hoy.
+- [x] `Descartar` sobre una tarjeta de triage sigue usando exclusivamente
+  `action: "dismiss"`, sin relación con `set_direction`.
+- [x] La barra de conciliación manual (`POST /api/stays/reconcile`) sigue
+  funcionando igual que hoy para cualquier combinación de tarjetas
+  seleccionadas, se haya persistido o no su `direction`.
+
 ## No-alcance
 
 - No modifica `api/staging.py`, `api/ftp_handler.py` ni la tabla
@@ -99,6 +163,18 @@ dificultando corregir manualmente una clasificación equivocada.
   `ParkingStay`.
 - No modifica `/api/stats`, Historial ni Reconciliación de Excel.
 - No mezcla automáticamente más de dos fechas de detecciones.
+- **(Reapertura)** No dispara ningún llamado nuevo de conciliación; sigue
+  dependiendo del mismo `POST /api/stays/auto-reconcile-exact` que ya corre
+  en cada `load()` del Dashboard.
+- **(Reapertura)** No agrega confirmación ni deshacer para `set_direction`;
+  el único control de error es que una detección ya resuelta responde `409`
+  y no se sobrescribe.
+- **(Reapertura)** No cambia el comportamiento de los botones sobre columnas
+  1 y 2 (detecciones ya con `direction` resuelta): siguen siendo selección
+  local únicamente.
+- **(Reapertura)** No recalibra el clasificador vertical de HU-007/008/010 ni
+  cambia sus umbrales; esta reapertura sólo cubre la corrección manual del
+  caso `UNKNOWN` restante.
 
 ## Código relacionado
 
@@ -108,6 +184,16 @@ dificultando corregir manualmente una clasificación equivocada.
   relacionadas; se preservan rutas y shapes.
 - Operación: deploy habitual de `centralparking.service` y Vercel, sin mover
   datos runtime.
+- **(Reapertura)** Frontend: `src/lib/stays.ts` (nueva función
+  `setDetectionDirection(id, direction)` que llama al `PATCH` de la
+  reapertura de HU-004) y `Dashboard.tsx` (`markAsEntry`/`markAsExit`
+  llaman a `setDetectionDirection` sólo para tarjetas de triage, con manejo
+  de error y actualización optimista del estado local de detecciones).
+- **(Reapertura)** Backend: consume la reapertura de
+  [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
+  (`PATCH /api/detections/{id}` con `action: "set_direction"`); no requiere
+  cambios propios en `api/database.py` ni `api/routers/reconciliation.py`
+  más allá de los ya descritos en esa HU.
 
 ## Contratos que deben preservarse
 
@@ -119,32 +205,53 @@ dificultando corregir manualmente una clasificación equivocada.
 - `GET /api/stays?date=YYYY-MM-DD` conserva query y respuesta; su semántica
   queda precisada como solapamiento del día en `America/Santiago`.
 - Login, Historial, Sightings y Reconciliación de Excel sin cambios.
+- **(Reapertura)** `PATCH /api/detections/{id}` con `action: "dismiss"`
+  conserva exactamente su contrato y comportamiento actuales; la nueva
+  acción `set_direction` es aditiva sobre el mismo endpoint.
 
 ## Impacto sobre funcionalidades existentes
 
 Cambia la presentación y la semántica del filtro `date` de estadías. El resto
 de la app (Historial, Sightings y Reconciliación Excel) no se ve afectado.
 
+**(Reapertura)** Cambia el efecto de los botones `Entrada`/`Salida`
+únicamente para tarjetas de triage (`direction === "UNKNOWN"`): antes sólo
+seleccionaban localmente, ahora además persisten `direction`. No cambia su
+efecto sobre tarjetas ya en columna 1 o 2. No cambia `Descartar` en ningún
+caso.
+
 ## Riesgos y datos
 
-- **Hallazgo bloqueante para el valor real de columnas 1 y 2:**
-  `api/staging.py::staging_promote_expired()` llama a
-  `log_to_db(plate, "DETECTED", status="STAGING_AUTO", conf=..., image_path=...)`
-  sin pasar `direction`. La evaluación de `direction_service.observe()` que sí
-  se calcula en `ftp_handler._handle_auto_detection()` solo se audita en
-  `audit_log` (consumida por `/api/audit/direction/metrics` de HU-009) y nunca
-  llega a la fila de `detection_log` que lee `/api/detections`. Resultado:
-  **hoy el 100% de las detecciones reales de cámara tienen
-  `direction: "UNKNOWN"`**, sin importar los umbrales de HU-008
-  (`DIRECTION_MIN_DISPLACEMENT`, `DIRECTION_MIN_CONSISTENCY`, etc.) — el
-  problema es de propagación del dato entre `staging_detections` y
-  `detection_log`, no de calibración. Ajustar esos umbrales sin resolver el
-  wiring no tendría ningún efecto visible.
-- Por eso mismo, en producción, columnas 1 y 2 estarán casi vacías y la
-  franja de triage concentrará la operación real hasta que ese wiring se
-  resuelva en una HU/spike de backend aparte (fuera de alcance acá).
-- Sin riesgo de datos nuevo: se reutilizan endpoints y componentes ya
-  probados; no se cambia ninguna regla de negocio ni de cobro.
+- **Hallazgo original (resuelto — ver Reapertura 2026-07-31):** esta sección
+  documentaba que `api/staging.py::staging_promote_expired()` no propagaba
+  `direction` a `detection_log`, dejando el 100% de las detecciones reales en
+  `UNKNOWN`. Ese wiring se resolvió en el commit `07f3a58a` (2026-07-24,
+  [HU-010](./HU-010-activar-clasificador-vertical-evidencia-suficiente.md),
+  `implementada`): hoy `direction` refleja el resultado real del clasificador
+  vertical cuando hay evidencia suficiente. La franja de triage ya no
+  concentra el 100% de la operación — sólo los casos donde el clasificador
+  automático no tuvo evidencia suficiente o la trayectoria fue ambigua, que
+  es exactamente el escenario que esta reapertura busca resolver
+  manualmente.
+- Sin riesgo de datos nuevo en el resto de columnas 1/2/3: se reutilizan
+  endpoints y componentes ya probados; no se cambia ninguna regla de negocio
+  ni de cobro.
+
+**(Reapertura)**
+
+- Si el `PATCH /api/detections/{id}` (`set_direction`) falla después de que
+  el administrador ya hizo clic, la tarjeta debe quedarse visiblemente en
+  triage (no desaparecer ni migrar de columna) para no perder la detección de
+  vista; ver criterio de aceptación correspondiente.
+- Doble clic rápido sobre la misma tarjeta podría disparar dos `PATCH`
+  concurrentes; el backend responde `409` al segundo (ver riesgos de
+  concurrencia en la reapertura de HU-004) — el frontend debe deshabilitar el
+  botón mientras la petición está en curso para reducir la probabilidad, sin
+  depender de eso como única defensa.
+- Error humano al clasificar manualmente ya era un riesgo aceptado por el
+  diseño de la barra de conciliación manual; esta reapertura no lo
+  incrementa, sólo hace que el error persista en `direction` además de en la
+  selección local.
 
 ## Pruebas de regresión
 
@@ -165,6 +272,22 @@ de la app (Historial, Sightings y Reconciliación Excel) no se ve afectado.
 - `npm run lint`, `npx tsc --noEmit`, suite de tests existente, `npm run
   build` en worktree aislado.
 
+**(Reapertura)**
+
+- `Entrada`/`Salida` sobre triage llama a `setDetectionDirection` con
+  el `id` y la dirección correcta; se verifica el body y método del `PATCH`.
+- Tras éxito, la tarjeta aparece en columna 1 o 2 (según corresponda) y ya no
+  en triage, sin esperar el polling de 15s.
+- Tras error (`409`/`404`/red), la tarjeta permanece en triage, se muestra el
+  error y la selección local no se pierde.
+- `Entrada`/`Salida` sobre una tarjeta de columna 1 o 2 no dispara
+  ningún `PATCH` de `set_direction` (sólo selección local).
+- `Descartar` no se ve afectado en ningún caso (triage, columna 1 o 2).
+- La barra de conciliación manual sigue funcionando igual con cualquier
+  combinación de tarjetas.
+- `npm run lint`, `npx tsc --noEmit`, suite de tests existente y `npm run
+  build` en worktree aislado, sin regresión sobre los casos ya cubiertos.
+
 ## Propuesta técnica
 
 1. Inicializar la fecha desde `Intl.DateTimeFormat` con zona
@@ -179,7 +302,52 @@ de la app (Historial, Sightings y Reconciliación Excel) no se ve afectado.
 6. Probar contrato SQL, cliente HTTP, interacción, responsive, lint,
    TypeScript y build aislado.
 
+**(Reapertura)**
+
+1. Agregar `setDetectionDirection(id, direction)` a `src/lib/stays.ts`:
+   `PATCH /api/detections/{id}` con body
+   `{ action: "set_direction", direction }`, mismo manejo de errores que
+   `dismissDetection`.
+2. En `Dashboard.tsx`, diferenciar en `markAsEntry`/`markAsExit` si la
+   tarjeta objetivo tiene `direction === "UNKNOWN"` (triage) o ya resuelta
+   (columna 1/2): sólo en el primer caso, llamar a
+   `setDetectionDirection` antes o junto con la selección local.
+3. Actualizar optimistamente el estado local de detecciones (mismo array que
+   alimenta `entradas`/`salidas`/`triage` vía `useMemo`) al recibir éxito del
+   `PATCH`, para que la tarjeta cambie de columna sin esperar el próximo
+   `load()`.
+4. En caso de error, revertir el estado optimista (si se aplicó) y mostrar el
+   error sin descartar la selección local ya hecha.
+5. No tocar `auto_reconcile_exact_matches`, `build_stay_proposals` ni el
+   polling de `DASHBOARD_REFRESH_MS`: siguen corriendo igual y son los que
+   efectivamente conciliar la estadía una vez que ambas detecciones
+   (entrada/salida) están en columnas 1/2 o ya fueron pareadas manualmente.
+6. Probar cliente HTTP nuevo, interacción de triage vs. columnas resueltas,
+   manejo de error, lint, TypeScript y build aislado.
+
 ## Evidencia de implementación
+
+- **Reapertura (2026-08-01): mover a pendientes al clasificar manualmente.**
+  - Frontend: commit `ba4bf48`,
+    [PR #13](https://github.com/anomvlito/adyac-camaras-frontend/pull/13),
+    merge `b38c2de8e73d4bbbb11b429cf90c0648c72e39b7`. Depende del backend de
+    la reapertura de
+    [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
+    (PR #59, ya desplegado).
+  - `npm run lint`: 0 errores, 4 advertencias preexistentes de
+    `no-img-element`. `npx tsc --noEmit`: sin errores.
+  - `npm test -- --run`: 7 archivos, 19 pruebas correctas — incluye el nuevo
+    `Dashboard.test.tsx` (flujo triage → columna tras éxito del `PATCH`, y
+    caso de error `409` que mantiene la tarjeta en triage) y el nuevo caso en
+    `stays.test.ts` para `setDetectionDirection` (método, body y propagación
+    de error).
+  - `npm run build`: correcto en worktree aislado.
+  - Vercel Production: `success` para el merge commit,
+    smoke `https://centralparking-1ozua5kxi-fas-projects-aa4f98ac.vercel.app`
+    HTTP 200.
+  - Issue #23 reabierto con comentario de trazabilidad; Project 4 movido a
+    `Etapa: In progress` / `Status: In Progress` al iniciar y de vuelta a
+    cierre verificado tras el deploy.
 
 - **Navegación diaria manual (2026-07-28):**
   - Frontend: PR
