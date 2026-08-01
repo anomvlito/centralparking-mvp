@@ -6,6 +6,7 @@ from api.database import (
     get_parking_stays,
     get_stay_proposals,
     reconcile_detection_events,
+    set_detection_direction,
 )
 from api.schemas.reconciliation import ReconcileStayRequest
 
@@ -41,3 +42,7 @@ def reconcile_stay(request: ReconcileStayRequest):
 
 def dismiss_detection(detection_id: int):
     return dismiss_detection_event(detection_id)
+
+
+def set_direction(detection_id: int, direction: str):
+    return set_detection_direction(detection_id, direction)

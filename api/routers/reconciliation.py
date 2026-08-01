@@ -14,6 +14,7 @@ from api.services.reconciliation import (
     reconcile_exact,
     create_plate_exclusion,
     reconcile_stay,
+    set_direction,
 )
 
 router = APIRouter(tags=["reconciliation"])
@@ -70,6 +71,8 @@ async def patch_detection(
     _: dict = Depends(require_admin),
 ):
     try:
+        if request.action == "set_direction":
+            return set_direction(detection_id, request.direction)
         return dismiss_detection(detection_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
