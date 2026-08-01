@@ -135,6 +135,29 @@ class ReconciliationIntegrationTests(unittest.TestCase):
                     [("UNMATCHED", None), ("DISMISSED", self.stay_id)],
                 )
 
+    def test_set_direction_persists_only_from_unknown(self):
+        from api.database import set_detection_direction
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.entry_id = self._insert_detection(now)
+
+        result = set_detection_direction(self.entry_id, "APPROACHING")
+        self.assertEqual(result["direction"], "APPROACHING")
+
+        with self._db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT direction FROM detection_log WHERE id = %s",
+                    (self.entry_id,),
+                )
+                self.assertEqual(cur.fetchone()["direction"], "APPROACHING")
+
+        with self.assertRaisesRegex(ValueError, "ya tiene una dirección"):
+            set_detection_direction(self.entry_id, "DEPARTING")
+
+        with self.assertRaises(LookupError):
+            set_detection_direction(-1, "APPROACHING")
+
     def test_earlier_duplicate_replaces_entry_of_existing_stay(self):
         from api.database import consolidate_short_entry_duplicates
         from api.database import reconcile_detection_events
