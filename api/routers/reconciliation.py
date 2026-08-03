@@ -115,3 +115,13 @@ async def exclude_plate(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+@router.get("/api/plate-exclusions")
+async def get_exclusions(user: dict = Depends(require_admin)):
+    from api.database import get_plate_exclusions
+    return get_plate_exclusions()
+
+@router.delete("/api/plate-exclusions/{plate}")
+async def delete_exclusion(plate: str, user: dict = Depends(require_admin)):
+    from api.database import remove_plate_exclusion
+    return remove_plate_exclusion(plate)

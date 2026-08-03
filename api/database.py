@@ -1404,6 +1404,27 @@ def get_sightings(limit: int = 50, plate: str = None, near: str = None,
         for r in rows
     ]
 
+def get_plate_exclusions() -> list:
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT normalized_plate, max_distance, active, created_at, created_by
+                FROM plate_exclusions
+                WHERE active = true
+                ORDER BY created_at DESC
+            """)
+            return cur.fetchall()
+
+def remove_plate_exclusion(plate: str) -> dict:
+    normalized = normalize_plate(plate)
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE plate_exclusions SET active = false
+                WHERE normalized_plate = %s
+            """, (normalized,))
+            return {"plate": normalized, "active": False}
+
 
 def review_session(session_id: int, review_status: str, user_id: int, username: str) -> dict:
     if review_status not in {"PLATE_OK", "DUPLICATE"}:

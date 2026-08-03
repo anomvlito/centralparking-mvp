@@ -27,7 +27,7 @@ from api.detect import alpr, HAS_ML, run_multi_strategy
 from api.database import (
     now_cl,
     find_similar_active_session, correct_session_plate, log_audit_event,
-    promote_review_image,
+    promote_review_image, is_plate_excluded
 )
 from api.auth import get_current_user, require_admin
 from api.staging import calculate_quality_score, staging_submit
@@ -98,6 +98,7 @@ def _quality_for(img: np.ndarray, plate: str, confidence: float) -> dict:
     }
 
 
+
 def _handle_auto_detection(plate: str, source: str, confidence: float,
                             strategy: str, img: np.ndarray = None,
                             center_y: float = None,
@@ -121,6 +122,11 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
     avistamientos. La apertura/cierre real de parking_sessions sigue
     siendo manual (/api/entry, /api/exit).
     """
+    if is_plate_excluded(plate):
+        _append_ftp_event(plate, source, confidence, strategy, action="IGNORED_MONTHLY")
+        return {"plate": plate, "action": "IGNORED_MONTHLY", "registered": False,
+                "confidence": confidence, "image_path": None}
+
     # No hay match exacto, pero puede ser el mismo auto mal leído antes
     # (dígito perdido por luces, carácter confundido). Si hay una sesión
     # recién abierta con patente muy parecida, se corrige esa sesión en
