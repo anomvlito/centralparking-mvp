@@ -1415,6 +1415,12 @@ def get_plate_exclusions() -> list:
             """)
             return cur.fetchall()
 
+def is_plate_excluded(plate: str) -> bool:
+    normalized = normalize_plate(plate)
+    with _db() as conn:
+        with conn.cursor() as cur:
+            return _is_excluded(cur, normalized)
+
 def remove_plate_exclusion(plate: str) -> dict:
     normalized = normalize_plate(plate)
     with _db() as conn:
