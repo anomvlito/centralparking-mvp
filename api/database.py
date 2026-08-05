@@ -618,7 +618,16 @@ def add_plate_exclusion(plate: str, max_distance: int, username: str) -> dict:
 
 def log_to_db(plate: str, action: str, status: str = "REAL",
               fee: float = 0, conf: float = 1.0, image_path: str = None,
-              direction: str = "UNKNOWN", source: str = None):
+              direction: str = "UNKNOWN", source: str = None,
+              logged_at: datetime.datetime = None):
+    """
+    logged_at es opcional: por defecto usa now() de Postgres (comportamiento
+    histórico, correcto para ENTRY/EXIT/VOID manuales, donde "ahora" es la
+    hora real del evento). staging_promote_expired() sí lo pasa explícito,
+    porque ahí "ahora" es el momento de la promoción (hasta ~150s después de
+    la detección real, o mucho más si el backend estuvo caído) y no la hora
+    real en que se guardó la foto.
+    """
     normalized = normalize_plate(plate)
     with _db() as conn:
         with conn.cursor() as cur:
@@ -630,11 +639,11 @@ def log_to_db(plate: str, action: str, status: str = "REAL",
             cur.execute("""
                 INSERT INTO detection_log
                     (plate, normalized_plate, action, status, fee, confidence,
-                     image_path, direction, match_status, source)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     image_path, direction, match_status, source, logged_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
                 RETURNING id
             """, (plate, normalized, action, status, fee, conf, image_path,
-                  direction, match_status, source or status))
+                  direction, match_status, source or status, logged_at))
             row = cur.fetchone()
     return int(row["id"])
 
