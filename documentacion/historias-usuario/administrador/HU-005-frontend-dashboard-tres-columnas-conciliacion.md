@@ -86,6 +86,36 @@ siguen comportándose exactamente igual que hoy (sólo selección local para la
 barra de conciliación, sin escritura al backend — el propio backend
 rechazaría con `409` un intento de sobrescribir una dirección ya resuelta).
 
+## Reapertura (2026-08-05): corregir o revertir una tarjeta ya clasificada
+
+La reapertura anterior (2026-07-31) sólo activaba `setDetectionDirection`
+para tarjetas de triage (`direction === "UNKNOWN"`); sobre una tarjeta ya en
+columna 1 o 2, los botones `Entrada`/`Salida` seguían siendo puramente
+selección local. En producción esto significaba que una tarjeta mal
+clasificada — por el clasificador automático o por un clic manual erróneo —
+quedaba atascada en la columna equivocada sin ninguna forma de moverla ni de
+devolverla a "Sin dirección clara".
+
+Con el backend de esta misma reapertura en
+[HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
+(`set_detection_direction` ahora acepta corregir mientras
+`match_status = 'UNMATCHED'`, sin importar el valor actual, y admite
+`"UNKNOWN"` como reversión), esta reapertura cambia el frontend para
+aprovecharlo:
+
+- `markAsEntry`/`markAsExit` ahora llaman a `setDetectionDirection` siempre
+  que la tarjeta vaya a cambiar de dirección (no sólo desde `UNKNOWN`): un
+  clic en `Salida` sobre una tarjeta de "Entradas pendientes" la mueve a
+  "Salidas pendientes".
+- Nuevo botón `Quitar dirección` en `DetectionCard`, visible únicamente en
+  tarjetas ya clasificadas (columna 1 o 2), que llama a
+  `setDetectionDirection(id, "UNKNOWN")` y devuelve la tarjeta a "Sin
+  dirección clara".
+
+Esto **reemplaza** el criterio y el no-alcance de la reapertura anterior que
+decían que los botones sobre columnas 1/2 "no llaman al nuevo `PATCH`: sólo
+actualizan la selección local" — eso ya no es así.
+
 ## Criterios de aceptación
 
 - [x] Existe un único selector de fecha operativa, iniciado en la fecha actual
@@ -128,7 +158,7 @@ rechazaría con `409` un intento de sobrescribir una dirección ya resuelta).
 - [x] El layout se adapta sin huecos ni columnas rotas en desktop y mobile
   (1 columna en mobile, 3 en desktop).
 
-### Reapertura: mover a pendientes al clasificar manualmente
+### Reapertura: mover a pendientes al clasificar manualmente (2026-07-31)
 
 - [x] En la franja de triage, hacer clic en `Entrada` o `Salida` sobre
   una tarjeta `direction === "UNKNOWN"` llama a
@@ -143,14 +173,31 @@ rechazaría con `409` un intento de sobrescribir una dirección ya resuelta).
 - [x] Si el `PATCH` falla (409, 404, error de red), la tarjeta permanece en
   la franja de triage, se muestra un error visible y la selección local para
   la barra de conciliación no se pierde.
-- [x] Sobre una tarjeta que ya está en columna 1 o columna 2 (`direction`
-  distinta de `UNKNOWN`), los botones `Entrada`/`Salida` no llaman al
-  nuevo `PATCH`: sólo actualizan la selección local, igual que hoy.
 - [x] `Descartar` sobre una tarjeta de triage sigue usando exclusivamente
   `action: "dismiss"`, sin relación con `set_direction`.
 - [x] La barra de conciliación manual (`POST /api/stays/reconcile`) sigue
   funcionando igual que hoy para cualquier combinación de tarjetas
   seleccionadas, se haya persistido o no su `direction`.
+
+> El criterio "sobre columna 1/2 los botones no llaman al `PATCH`" de esta
+> sección quedó **superado** por la reapertura del 2026-08-05, ver abajo.
+
+### Reapertura: corregir o revertir dirección (2026-08-05)
+
+- [x] Sobre una tarjeta ya en columna 1 o 2, hacer clic en el botón contrario
+  (`Salida` sobre una de "Entradas pendientes", o viceversa) llama a
+  `setDetectionDirection` con la nueva dirección y mueve la tarjeta a la
+  columna correcta de inmediato, sin esperar el polling.
+- [x] Nuevo botón `Quitar dirección`, visible sólo cuando `direction !==
+  "UNKNOWN"`, llama a `setDetectionDirection(id, "UNKNOWN")` y devuelve la
+  tarjeta a "Sin dirección clara".
+- [x] Hacer clic en el botón que ya coincide con la dirección actual de la
+  tarjeta (ej. `Entrada` sobre una tarjeta ya `APPROACHING`) no dispara un
+  `PATCH` redundante — sólo actualiza la selección local para la barra de
+  conciliación manual.
+- [x] Si el `PATCH` falla, la tarjeta permanece en su columna actual y se
+  muestra un error visible.
+- [x] `Descartar` no se ve afectado en ninguna columna.
 
 ## No-alcance
 
@@ -166,15 +213,18 @@ rechazaría con `409` un intento de sobrescribir una dirección ya resuelta).
 - **(Reapertura)** No dispara ningún llamado nuevo de conciliación; sigue
   dependiendo del mismo `POST /api/stays/auto-reconcile-exact` que ya corre
   en cada `load()` del Dashboard.
-- **(Reapertura)** No agrega confirmación ni deshacer para `set_direction`;
-  el único control de error es que una detección ya resuelta responde `409`
-  y no se sobrescribe.
-- **(Reapertura)** No cambia el comportamiento de los botones sobre columnas
-  1 y 2 (detecciones ya con `direction` resuelta): siguen siendo selección
-  local únicamente.
+- **(Reapertura 2026-07-31, reemplazada 2026-08-05)** No agrega confirmación
+  ni deshacer explícito para `set_direction`; el control de error es que una
+  detección ya conciliada (`match_status != 'UNMATCHED'`) responde `409` y no
+  se sobrescribe. El "deshacer" para detecciones aún pendientes ahora sí
+  existe: es justamente `Quitar dirección` (ver reapertura 2026-08-05).
+- **(Reapertura 2026-08-05)** No agrega un botón "Quitar dirección" en la
+  franja de triage (no aplica: ya está en `UNKNOWN`).
 - **(Reapertura)** No recalibra el clasificador vertical de HU-007/008/010 ni
-  cambia sus umbrales; esta reapertura sólo cubre la corrección manual del
-  caso `UNKNOWN` restante.
+  cambia sus umbrales; esta reapertura sólo cubre la corrección manual.
+- **(Reapertura 2026-08-05)** No permite corregir la dirección de una
+  detección ya conciliada en una estadía (`match_status != 'UNMATCHED'`);
+  eso queda fuera de alcance también en el backend (ver HU-004).
 
 ## Código relacionado
 
@@ -184,11 +234,17 @@ rechazaría con `409` un intento de sobrescribir una dirección ya resuelta).
   relacionadas; se preservan rutas y shapes.
 - Operación: deploy habitual de `centralparking.service` y Vercel, sin mover
   datos runtime.
-- **(Reapertura)** Frontend: `src/lib/stays.ts` (nueva función
+- **(Reapertura 2026-07-31)** Frontend: `src/lib/stays.ts` (nueva función
   `setDetectionDirection(id, direction)` que llama al `PATCH` de la
   reapertura de HU-004) y `Dashboard.tsx` (`markAsEntry`/`markAsExit`
-  llaman a `setDetectionDirection` sólo para tarjetas de triage, con manejo
-  de error y actualización optimista del estado local de detecciones).
+  llamaban a `setDetectionDirection` sólo para tarjetas de triage — ver
+  reapertura 2026-08-05 para el cambio posterior).
+- **(Reapertura 2026-08-05)** Frontend: `src/lib/stays.ts`
+  (`setDetectionDirection` amplía su tipo a incluir `"UNKNOWN"`) y
+  `Dashboard.tsx` (`markAsEntry`/`markAsExit` ahora persisten siempre que la
+  dirección cambie, sin importar el valor actual; nueva función
+  `resetDirection` y botón `Quitar dirección` en `DetectionCard`, visible
+  cuando `direction !== "UNKNOWN"`).
 - **(Reapertura)** Backend: consume la reapertura de
   [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
   (`PATCH /api/detections/{id}` con `action: "set_direction"`); no requiere
@@ -214,10 +270,12 @@ rechazaría con `409` un intento de sobrescribir una dirección ya resuelta).
 Cambia la presentación y la semántica del filtro `date` de estadías. El resto
 de la app (Historial, Sightings y Reconciliación Excel) no se ve afectado.
 
-**(Reapertura)** Cambia el efecto de los botones `Entrada`/`Salida`
-únicamente para tarjetas de triage (`direction === "UNKNOWN"`): antes sólo
-seleccionaban localmente, ahora además persisten `direction`. No cambia su
-efecto sobre tarjetas ya en columna 1 o 2. No cambia `Descartar` en ningún
+**(Reapertura 2026-07-31, ampliada 2026-08-05)** Cambia el efecto de los
+botones `Entrada`/`Salida`: primero sólo para tarjetas de triage
+(`direction === "UNKNOWN"`), y desde el 2026-08-05 también sobre tarjetas ya
+en columna 1 o 2 — siempre que el clic vaya a cambiar la dirección actual,
+persisten `direction` y mueven la tarjeta de columna. Se agrega el botón
+`Quitar dirección` (columnas 1/2 → triage). No cambia `Descartar` en ningún
 caso.
 
 ## Riesgos y datos
@@ -253,6 +311,18 @@ caso.
   incrementa, sólo hace que el error persista en `direction` además de en la
   selección local.
 
+**(Reapertura 2026-08-05)**
+
+- Antes de esta reapertura, un error de clasificación en columna 1/2 era
+  irreversible desde la UI (el backend lo permitía sólo desde `UNKNOWN`).
+  Ahora `Salida`/`Entrada`/`Quitar dirección` lo corrigen sin necesitar
+  acceso directo a la base de datos.
+- Clic redundante (ej. `Entrada` sobre una tarjeta ya `APPROACHING`) no debe
+  generar tráfico de red innecesario ni parpadeo visual: se evita comparando
+  `item.direction` contra la dirección destino antes de llamar al `PATCH`.
+- Mismo riesgo de doble clic concurrente que la reapertura anterior; el
+  backend sigue acotando el efecto por `match_status = 'UNMATCHED'`.
+
 ## Pruebas de regresión
 
 - Login, Historial, Sightings y Reconciliación de Excel sin cambios.
@@ -280,13 +350,24 @@ caso.
   en triage, sin esperar el polling de 15s.
 - Tras error (`409`/`404`/red), la tarjeta permanece en triage, se muestra el
   error y la selección local no se pierde.
-- `Entrada`/`Salida` sobre una tarjeta de columna 1 o 2 no dispara
-  ningún `PATCH` de `set_direction` (sólo selección local).
 - `Descartar` no se ve afectado en ningún caso (triage, columna 1 o 2).
 - La barra de conciliación manual sigue funcionando igual con cualquier
   combinación de tarjetas.
 - `npm run lint`, `npx tsc --noEmit`, suite de tests existente y `npm run
   build` en worktree aislado, sin regresión sobre los casos ya cubiertos.
+
+**(Reapertura 2026-08-05)**
+
+- `Salida` sobre una tarjeta `APPROACHING` (columna 1) la mueve a columna 2;
+  ya no aparece en columna 1.
+- `Quitar dirección` sobre una tarjeta resuelta la devuelve a la franja de
+  triage ("Sin dirección clara").
+- El botón `Quitar dirección` no aparece en tarjetas de triage
+  (`direction === "UNKNOWN"`).
+- `npm run lint` (0 errores nuevos), `npx tsc --noEmit` (limpio), `npm test
+  -- --run` (7 archivos, 22 pruebas — 3 nuevas: mover entre columnas, volver
+  a triage, PATCH con `UNKNOWN` en `stays.test.ts`) y `npm run build` en
+  worktree aislado.
 
 ## Propuesta técnica
 
@@ -326,6 +407,28 @@ caso.
    manejo de error, lint, TypeScript y build aislado.
 
 ## Evidencia de implementación
+
+- **Reapertura (2026-08-05): corregir o revertir dirección.**
+  - Frontend: commit `fe86f77`,
+    [PR #14](https://github.com/anomvlito/adyac-camaras-frontend/pull/14),
+    merge `0625ca199fd976698da4830ddf45cc7944b0cd8d`. Depende del backend de
+    la reapertura de
+    [HU-004](./HU-004-backend-conciliacion-automatica-entradas-salidas.md)
+    (PR #61, ya desplegado).
+  - `npm run lint`: 0 errores nuevos (1 error preexistente en
+    `src/app/page.tsx`, no tocado; 4 advertencias preexistentes de
+    `no-img-element`). `npx tsc --noEmit`: sin errores.
+  - `npm test -- --run`: 7 archivos, 22 pruebas correctas — 3 nuevas: mover
+    una tarjeta de "Entradas pendientes" a "Salidas pendientes" al hacer
+    clic en `Salida`, devolver una tarjeta a "Sin dirección clara" con
+    `Quitar dirección`, y el caso de `stays.test.ts` para
+    `setDetectionDirection(id, "UNKNOWN")`.
+  - `npm run build`: correcto en worktree aislado.
+  - Vercel Production: `success` para el merge commit, smoke
+    `https://centralparking-fiwm1nzyv-fas-projects-aa4f98ac.vercel.app`
+    HTTP 200.
+  - Issue #23 reabierto con comentario de trazabilidad; Project 4 movido a
+    `Etapa: In progress` / `Status: In Progress` al iniciar.
 
 - **Reapertura (2026-08-01): mover a pendientes al clasificar manualmente.**
   - Frontend: commit `ba4bf48`,
