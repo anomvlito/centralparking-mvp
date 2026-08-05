@@ -135,7 +135,7 @@ class ReconciliationIntegrationTests(unittest.TestCase):
                     [("UNMATCHED", None), ("DISMISSED", self.stay_id)],
                 )
 
-    def test_set_direction_persists_only_from_unknown(self):
+    def test_set_direction_allows_correction_while_unmatched(self):
         from api.database import set_detection_direction
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -144,19 +144,35 @@ class ReconciliationIntegrationTests(unittest.TestCase):
         result = set_detection_direction(self.entry_id, "APPROACHING")
         self.assertEqual(result["direction"], "APPROACHING")
 
+        # Corrección: se puso "entrada" por error, en realidad era "salida".
+        result = set_detection_direction(self.entry_id, "DEPARTING")
+        self.assertEqual(result["direction"], "DEPARTING")
+
+        # Reversión explícita a "sin dirección clara".
+        result = set_detection_direction(self.entry_id, "UNKNOWN")
+        self.assertEqual(result["direction"], "UNKNOWN")
+
         with self._db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT direction FROM detection_log WHERE id = %s",
                     (self.entry_id,),
                 )
-                self.assertEqual(cur.fetchone()["direction"], "APPROACHING")
-
-        with self.assertRaisesRegex(ValueError, "ya tiene una dirección"):
-            set_detection_direction(self.entry_id, "DEPARTING")
+                self.assertEqual(cur.fetchone()["direction"], "UNKNOWN")
 
         with self.assertRaises(LookupError):
             set_detection_direction(-1, "APPROACHING")
+
+    def test_set_direction_rejected_once_reconciled(self):
+        from api.database import dismiss_detection_event, set_detection_direction
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.entry_id = self._insert_detection(now)
+
+        dismiss_detection_event(self.entry_id)
+
+        with self.assertRaisesRegex(ValueError, "ya fue conciliada"):
+            set_detection_direction(self.entry_id, "APPROACHING")
 
     def test_earlier_duplicate_replaces_entry_of_existing_stay(self):
         from api.database import consolidate_short_entry_duplicates
