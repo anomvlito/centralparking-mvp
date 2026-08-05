@@ -216,7 +216,8 @@ def staging_promote_expired():
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, plate, confidence, combined_score, strategy, image_path
+                SELECT id, plate, confidence, combined_score, strategy,
+                       image_path, detected_at
                 FROM staging_detections
                 WHERE status = 'pending' AND expires_at <= now()
             """)
@@ -242,7 +243,8 @@ def staging_promote_expired():
                 log_to_db(plate, "DETECTED", status="STAGING_AUTO",
                           conf=float(row["combined_score"]),
                           image_path=row["image_path"],
-                          direction=direction)
+                          direction=direction,
+                          logged_at=row["detected_at"])
                 _audit(plate, "DETECTED",
                        {"combined_score": float(row["combined_score"]),
                         "strategy": row["strategy"]})
