@@ -1206,19 +1206,19 @@ def set_detection_direction(detection_id: int, direction: str) -> dict:
             cur.execute("""
                 UPDATE detection_log
                 SET direction = %s
-                WHERE id = %s AND direction = 'UNKNOWN'
+                WHERE id = %s AND match_status = 'UNMATCHED'
                 RETURNING id
             """, (direction, detection_id))
             row = cur.fetchone()
             if not row:
                 cur.execute(
-                    "SELECT direction FROM detection_log WHERE id = %s",
+                    "SELECT match_status FROM detection_log WHERE id = %s",
                     (detection_id,),
                 )
                 existing = cur.fetchone()
                 if not existing:
                     raise LookupError("Detección no encontrada")
-                raise ValueError("La detección ya tiene una dirección resuelta")
+                raise ValueError("La detección ya fue conciliada y no admite corrección de dirección")
     return {"detection_id": detection_id, "direction": direction}
 
 

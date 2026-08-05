@@ -11,7 +11,7 @@ class ReconcileStayRequest(BaseModel):
 
 class DetectionActionRequest(BaseModel):
     action: Literal["dismiss", "set_direction"]
-    direction: Optional[Literal["APPROACHING", "DEPARTING"]] = None
+    direction: Optional[Literal["APPROACHING", "DEPARTING", "UNKNOWN"]] = None
 
     @model_validator(mode="after")
     def _require_direction_for_set_direction(self) -> "DetectionActionRequest":
