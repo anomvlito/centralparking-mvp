@@ -424,3 +424,46 @@ La conciliación usa transacción y locks; las pruebas usan patentes sintéticas
     `PATCH /api/detections/{id}` sin `Authorization` responde `401`.
   - Issue #22 reabierto con comentario de trazabilidad; Project 4 movido a
     `Etapa: In progress` / `Status: In Progress` al iniciar.
+
+- **Fix post-implementación (2026-08-05): `logged_at` real al promover desde
+  staging.** El administrador reportó desfases de minutos entre la hora que
+  muestra el sistema, el nombre del archivo y la hora quemada en la imagen.
+  Causa: `staging_promote_expired()` (`api/staging.py`) insertaba en
+  `detection_log` vía `log_to_db()` sin pasar la hora real — la columna
+  `logged_at` quedaba con el `DEFAULT now()` de Postgres, evaluado en el
+  momento de la promoción (hasta ~150s después de la detección real, por el
+  TTL de staging de 2 minutos + polling cada 30s), no en el momento real en
+  que se guardó la mejor foto (`staging_detections.detected_at`, que sí es
+  correcta). Confirmado con datos reales de producción (2000 detecciones):
+  desfase sistemático de 120 a 155s (mediana 134s) en prácticamente el 100%
+  de las detecciones automáticas, más un caso extremo de casi 2 horas
+  (patente `KPBJ28`, 2026-08-03) que coincide con una ventana de deploy
+  fallido seguido de uno exitoso — mientras el backend estuvo caído, el
+  backlog de staging quedó congelado y se promovió todo de una vez al
+  reiniciar, con `logged_at` igual a la hora de reinicio.
+  Solución: `log_to_db()` acepta `logged_at` opcional
+  (`COALESCE(%s, now())`, preservando `now()` para `ENTRY`/`EXIT`/`VOID`
+  manuales) y `staging_promote_expired()` le pasa
+  `staging_detections.detected_at`. Commit `846f0e7`,
+  [PR #63](https://github.com/anomvlito/centralparking-mvp/pull/63),
+  merge `292aec419d5fdcf5bbf4cd5dd9e2b3e4f0483926`.
+  - Verificación: `unittest discover` 53 pruebas sin regresión; nuevo
+    `tests/test_staging_logged_at.py` contra Postgres real
+    (`RUN_DB_INTEGRATION_TESTS=1`) — detección sintética "de hace 3 horas"
+    con `expires_at` ya vencido, promovida con `logged_at` a menos de 5s de
+    la hora real (no de "ahora"), y `log_to_db` sin `logged_at` explícito
+    sigue usando `now()`; `py_compile` e import de `api.detect:app` (49
+    rutas) correctos.
+  - Deploy VPS: [run 31044346512](https://github.com/anomvlito/centralparking-mvp/actions/runs/31044346512)
+    `success`.
+  - Verificación en producción con tráfico real: la primera detección
+    posterior al deploy (patente `VXVD37`, id `10366`,
+    `historico/2026-08-05/16-31-27_VXVD37_2026-08-05.jpg`) quedó con
+    `logged_at` a **0.53 segundos** del nombre del archivo, contra los
+    ~120-150s que hubiera tenido antes del fix.
+  - Alcance: sólo detecciones futuras; no se hizo backfill del histórico ya
+    promovido con timestamp incorrecto (se evalúa aparte si hace falta).
+  - No se tocó Kanban/Project 4 para este fix (mismo criterio que el fix
+    post-implementación del 2026-07-24): es una corrección de un bug del
+    contrato `detected_at`/`logged_at` de `DetectionEvent`, no un cambio de
+    alcance de la HU.

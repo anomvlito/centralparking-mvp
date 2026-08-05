@@ -145,6 +145,31 @@ Foto capturada
 
 ---
 
+### ✅ [RESUELTO] `logged_at` Reflejaba la Hora de Promoción, no la Hora Real de Detección
+
+**Problema:** Varias detecciones mostraban una hora (`detected_at` en el dashboard) distinta —por minutos, a veces horas— de la hora del nombre del archivo y de la hora quemada en la imagen de la cámara.
+
+**Ubicación:** `api/staging.py::staging_promote_expired()`, `api/database.py::log_to_db()`
+
+**Causa:** Toda detección espera hasta 2 minutos en un buffer ("staging", compite por la mejor foto de la misma patente) antes de promoverse a `detection_log`. Al promoverla, `log_to_db()` no recibía la hora real en que se guardó la foto (`staging_detections.detected_at`, correcta) — dejaba que Postgres usara `DEFAULT now()`, es decir la hora de la promoción. Con datos reales (2000 detecciones) el desfase fue de 120 a 155s en casi el 100% de los casos, y si el backend estuvo caído, todo el backlog se promovía de golpe al reiniciar con `logged_at` = hora de reinicio (caso real: casi 2 horas de diferencia).
+
+**Solución aplicada:**
+```python
+# database.py
+def log_to_db(..., logged_at: datetime.datetime = None):
+    cur.execute("""
+        INSERT INTO detection_log (..., logged_at)
+        VALUES (..., COALESCE(%s, now()))
+    """, (..., logged_at))
+
+# staging.py::staging_promote_expired()
+log_to_db(plate, "DETECTED", ..., logged_at=row["detected_at"])
+```
+
+**Por qué funciona:** `staging_detections.detected_at` ya se capturaba correctamente al momento real de la detección; sólo faltaba propagarlo en vez de descartarlo al promover. `ENTRY`/`EXIT`/`VOID` manuales (los otros llamadores de `log_to_db`) no pasan `logged_at`, así que siguen usando `now()` sin cambios — ahí "ahora" sí es la hora real del evento.
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
