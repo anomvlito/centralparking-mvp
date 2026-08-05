@@ -57,8 +57,21 @@ en su lectura estricta de "la dirección es ayuda visual y nunca autoridad":
 la corrección manual sí queda como autoridad sobre `direction`, aunque sigue
 sin producir cobro, sanción ni acceso por sí sola.
 
+La reapertura de 2026-08-05 exige además que esa corrección manual pueda
+aplicarse las veces que haga falta mientras la detección siga pendiente
+(`match_status = 'UNMATCHED'`) — moverla entre entrada/salida o devolverla a
+`UNKNOWN` con el botón "Quitar dirección" — en vez de sólo una vez desde
+`UNKNOWN`. Sólo una detección ya conciliada en una estadía queda fuera de
+alcance.
+
 ## Evidencia
 
+- Corregir/revertir dirección de una detección pendiente: backend
+  [PR #61](https://github.com/anomvlito/centralparking-mvp/pull/61) (el
+  primer intento de deploy falló por timeout de SSH del runner, transitorio;
+  el reintento completó `success`); frontend
+  [PR #14](https://github.com/anomvlito/adyac-camaras-frontend/pull/14),
+  Vercel Production y smoke HTTP 200.
 - Dirección manual persistida al clasificar UNKNOWN: backend
   [PR #59](https://github.com/anomvlito/centralparking-mvp/pull/59), deploy
   [30709705482](https://github.com/anomvlito/centralparking-mvp/actions/runs/30709705482);

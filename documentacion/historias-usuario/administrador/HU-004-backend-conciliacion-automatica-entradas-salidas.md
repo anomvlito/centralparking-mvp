@@ -63,6 +63,30 @@ después de este cambio.
 El campo `detection_log.direction` ya existe (`VARCHAR(20) NOT NULL DEFAULT
 'UNKNOWN'`); esta reapertura no requiere migración, sólo un `UPDATE`.
 
+## Reapertura (2026-08-05): corregir o revertir una dirección ya resuelta
+
+La reapertura anterior (2026-07-31) sólo permitía `UNKNOWN → APPROACHING` o
+`UNKNOWN → DEPARTING`, una única vez (`WHERE direction = 'UNKNOWN'`). En
+producción esto significaba que una detección mal clasificada — por el
+clasificador automático o por un clic erróneo del administrador — quedaba
+atascada de forma permanente en la columna equivocada (Entradas o Salidas
+pendientes), sin ninguna forma de moverla ni de devolverla a "sin dirección
+clara".
+
+Esta reapertura relaja esa restricción: mientras la detección siga pendiente
+de conciliación (`match_status = 'UNMATCHED'`), su `direction` puede
+corregirse las veces que haga falta, incluyendo revertirla explícitamente a
+`UNKNOWN`. Una vez que la detección fue consumida por una conciliación
+(`match_status` pasa a `MATCHED_ENTRY`/`MATCHED_EXIT`/`DISMISSED`), la acción
+se rechaza con `409` — corregir la dirección de una detección ya conciliada
+en una estadía queda fuera de alcance (sería una corrección sobre la estadía,
+no sobre la detección).
+
+Esto también **reemplaza** el no-alcance que había fijado la reapertura
+anterior ("permitir corregir una detección que ya tiene
+`APPROACHING`/`DEPARTING` … no es competencia de esta acción manual"): con
+esta reapertura sí lo es, siempre que la detección siga `UNMATCHED`.
+
 ## Contratos
 
 ```ts
@@ -106,15 +130,15 @@ Endpoints:
   una de salida y crea una estadía completa.
 - `PATCH /api/detections/{detection_id}` con `action: dismiss` descarta la
   detección para conciliación sin eliminarla.
-- **(Reapertura)** `PATCH /api/detections/{detection_id}` con
-  `action: set_direction` y `direction: "APPROACHING" | "DEPARTING"` fija
-  manualmente la dirección de una detección hoy `UNKNOWN`. Sólo aplica sobre
-  detecciones `UNKNOWN`; no permite reescribir una dirección ya resuelta por
-  el clasificador automático (evita que una corrección manual pise una
-  clasificación con evidencia real). No cambia texto, confianza, timestamp,
-  imagen, `match_status` ni dispara la conciliación por sí sola — la
-  conciliación automática existente la recoge en su próximo ciclo si
-  corresponde.
+- **(Reapertura 2026-07-31, ampliada 2026-08-05)** `PATCH
+  /api/detections/{detection_id}` con `action: set_direction` y
+  `direction: "APPROACHING" | "DEPARTING" | "UNKNOWN"` fija o corrige la
+  dirección de una detección mientras siga `match_status = 'UNMATCHED'`,
+  incluyendo revertirla a `UNKNOWN`. Responde `409` si la detección ya fue
+  conciliada (`match_status != 'UNMATCHED'`). No cambia texto, confianza,
+  timestamp, imagen ni `match_status`, y no dispara la conciliación por sí
+  sola — la conciliación automática existente la recoge en su próximo ciclo
+  si corresponde.
 
 `/api/cars`, `/api/history`, `/api/entry` y `/api/exit/{plate}` se mantienen
 por compatibilidad. No son el modelo principal de la nueva interfaz.
@@ -143,14 +167,11 @@ por compatibilidad. No son el modelo principal de la nueva interfaz.
 - [x] `CarsResponse` conserva literalmente `Record<string, ParkedCar>` con
   `eventFee?: number | null`.
 
-### Reapertura: dirección manual
+### Reapertura: dirección manual (2026-07-31)
 
 - [x] `PATCH /api/detections/{id}` con `action: "set_direction"` y
   `direction: "APPROACHING" | "DEPARTING"` persiste el campo `direction` de
   esa detección.
-- [x] La acción sólo tiene efecto si la detección está hoy en
-  `direction: "UNKNOWN"`; sobre una detección ya `APPROACHING`/`DEPARTING`
-  responde `409` sin modificarla.
 - [x] La acción no cambia `detected_plate`, `normalized_plate`, `confidence`,
   `detected_at`, `image_url`, `match_status` ni `stay_id`.
 - [x] Requiere la misma autenticación que `dismiss` (`require_admin`).
@@ -160,6 +181,22 @@ por compatibilidad. No son el modelo principal de la nueva interfaz.
   ni `POST /api/stays/reconcile`: la conciliación automática sigue matcheando
   por patente + tiempo, con o sin esta corrección.
 
+> El criterio "sólo tiene efecto sobre `UNKNOWN`; ya resuelta responde `409`"
+> de esta sección quedó **superado** por la reapertura del 2026-08-05, ver
+> abajo.
+
+### Reapertura: corregir o revertir dirección (2026-08-05)
+
+- [x] La acción tiene efecto mientras `match_status = 'UNMATCHED'`,
+  sin importar el valor actual de `direction` (permite `APPROACHING →
+  DEPARTING`, `DEPARTING → APPROACHING` y cualquier valor `→ UNKNOWN`).
+- [x] `direction: "UNKNOWN"` es un valor válido del payload (reversión
+  explícita a "sin dirección clara").
+- [x] Una vez que `match_status != 'UNMATCHED'` (detección ya conciliada), la
+  acción responde `409` con mensaje "ya fue conciliada" y no modifica la fila.
+- [x] No se modifica `build_stay_proposals`, `auto_reconcile_exact_matches`
+  ni `POST /api/stays/reconcile`.
+
 ## No-alcance
 
 - Eliminar físicamente `/api/cars` o `parking_sessions`.
@@ -167,9 +204,9 @@ por compatibilidad. No son el modelo principal de la nueva interfaz.
 - Convertir un match probabilístico en cobro, sanción o acceso.
 - Borrar detecciones, sesiones, imágenes o auditoría.
 - Calibrar automáticamente el clasificador vertical.
-- **(Reapertura)** Permitir corregir una detección que ya tiene
-  `APPROACHING`/`DEPARTING` (eso es competencia del clasificador automático de
-  HU-007/008, no de esta acción manual).
+- **(Reapertura 2026-08-05)** Corregir la dirección de una detección ya
+  conciliada en una estadía (`match_status != 'UNMATCHED'`) — eso requeriría
+  deshacer la estadía, no sólo actualizar `direction`.
 - **(Reapertura)** Cambiar `build_stay_proposals`, el scoring de propuestas o
   cualquier regla de negocio de conciliación.
 - **(Reapertura)** Registrar auditoría dedicada de quién hizo la corrección
@@ -184,17 +221,28 @@ por compatibilidad. No son el modelo principal de la nueva interfaz.
 - Frontend: lo consume HU-005.
 - Operación: `centralparking.service`; migración aditiva e idempotente durante
   el lifespan actual.
-- **(Reapertura)** Backend: `api/schemas/reconciliation.py` (ampliar
-  `DetectionActionRequest.action` a `Literal["dismiss", "set_direction"]` y
-  agregar `direction: Literal["APPROACHING", "DEPARTING"] | None`),
+- **(Reapertura 2026-07-31)** Backend: `api/schemas/reconciliation.py`
+  (ampliar `DetectionActionRequest.action` a
+  `Literal["dismiss", "set_direction"]` y agregar
+  `direction: Literal["APPROACHING", "DEPARTING"] | None`),
   `api/routers/reconciliation.py` (dispatch de la nueva acción en el mismo
   `PATCH /api/detections/{detection_id}`), `api/services/reconciliation.py`
   (nueva función delgada equivalente a `dismiss_detection_event`) y
-  `api/database.py` (nueva función `set_detection_direction(detection_id,
-  direction)` que hace `UPDATE detection_log SET direction = %s WHERE
-  detection_id = %s AND direction = 'UNKNOWN'` y verifica `rowcount` para
-  distinguir 404 de 409). No se toca `build_stay_proposals`,
+  `api/database.py::set_detection_direction(detection_id, direction)`, que
+  originalmente hacía `UPDATE detection_log SET direction = %s WHERE id = %s
+  AND direction = 'UNKNOWN'`. No se toca `build_stay_proposals`,
   `auto_reconcile_exact_matches` ni `reconcile_detection_events`.
+- **(Reapertura 2026-08-05)** `api/schemas/reconciliation.py` (agregar
+  `"UNKNOWN"` al `Literal` de `direction`) y
+  `api/database.py::set_detection_direction` (el `WHERE` pasa de
+  `direction = 'UNKNOWN'` a `match_status = 'UNMATCHED'`; el mensaje del
+  `ValueError` en el 409 pasa de "ya tiene una dirección resuelta" a "ya fue
+  conciliada y no admite corrección de dirección"). Frontend:
+  `src/lib/stays.ts::setDetectionDirection` (tipo ampliado a incluir
+  `"UNKNOWN"`) y `src/features/dashboard/Dashboard.tsx`
+  (`markAsEntry`/`markAsExit` persisten siempre que la dirección cambie en
+  vez de sólo desde `UNKNOWN`; nuevo botón "Quitar dirección" en
+  `DetectionCard` y función `resetDirection`).
 - **(Reapertura)** Frontend: lo consume HU-005 (`src/lib/stays.ts`,
   `src/features/dashboard/Dashboard.tsx`).
 
@@ -226,21 +274,26 @@ dirección es ayuda visual y nunca autoridad" — el resto de esa garantía
 
 La conciliación usa transacción y locks; las pruebas usan patentes sintéticas.
 
-**(Reapertura)**
+**(Reapertura 2026-07-31, revisado 2026-08-05)**
 
 - Error humano: el administrador puede fijar `APPROACHING`/`DEPARTING`
   equivocado; a diferencia del clasificador automático, no hay evidencia de
-  trayectoria que lo respalde. El `WHERE direction = 'UNKNOWN'` en el
-  `UPDATE` evita que la corrección se aplique dos veces o pise una
-  clasificación automática posterior, pero no evita elegir el sentido
-  incorrecto — se acepta como parte del criterio existente de "descartar no
-  es autoridad sobre patente/cobro", no sobre dirección.
-- Carrera de dos clicks simultáneos sobre la misma detección (mismo patrón de
-  riesgo que ya existe para `dismiss`): el `UPDATE ... WHERE direction =
-  'UNKNOWN'` hace que sólo el primero tenga efecto; el segundo debe recibir
-  `409` en vez de aplicar dos veces.
-- No queda registro de quién ni cuándo corrigió la dirección (ver no-alcance:
-  auditoría dedicada queda fuera de esta reapertura).
+  trayectoria que lo respalde. Desde la reapertura del 2026-08-05 esto ya no
+  es irreversible: mientras la detección siga `UNMATCHED`, puede corregirse
+  o revertirse a `UNKNOWN` las veces que haga falta — se acepta como parte
+  del criterio existente de "descartar no es autoridad sobre patente/cobro",
+  no sobre dirección.
+- Carrera de dos correcciones simultáneas sobre la misma detección (mismo
+  patrón de riesgo que ya existe para `dismiss`): el `UPDATE ... WHERE
+  match_status = 'UNMATCHED'` sigue acotando el efecto a detecciones
+  pendientes; si la detección se concilia justo entre dos clicks, el segundo
+  recibe `409` en vez de aplicar sobre una fila ya consumida. El clasificador
+  automático no vuelve a evaluar `direction` después de la ingesta (no hay
+  job recurrente que la reprocese), así que no compite con la corrección
+  manual una vez hecha.
+- No queda registro de quién ni cuándo corrigió la dirección, ni cuántas
+  veces se corrigió (ver no-alcance: auditoría dedicada queda fuera de esta
+  reapertura).
 
 ## Pruebas de regresión
 
@@ -269,6 +322,17 @@ La conciliación usa transacción y locks; las pruebas usan patentes sintéticas
 - `auto_reconcile_exact_matches` y `build_stay_proposals` producen el mismo
   resultado antes y después de esta reapertura para detecciones sin cambios
   de `direction` (no regresión de la conciliación automática existente).
+
+**(Reapertura 2026-08-05)**
+
+- Una detección `UNMATCHED` admite corregir `direction` repetidamente
+  (`APPROACHING → DEPARTING → UNKNOWN`), sin perder `detected_plate`,
+  `confidence`, `detected_at`, `image_url` ni `match_status`.
+- Tras `dismiss` (o cualquier transición que saque `match_status` de
+  `UNMATCHED`), `set_direction` responde `409` y no modifica la fila.
+- `detection_id` inexistente sigue respondiendo `404`.
+- `dismiss` y el resto de acciones del router siguen sin regresión sobre el
+  mismo schema ampliado.
 
 ## Evidencia de implementación
 
@@ -339,3 +403,24 @@ La conciliación usa transacción y locks; las pruebas usan patentes sintéticas
   - Issue #22 reabierto con comentario de trazabilidad; Project 4 movido a
     `Etapa: In progress` / `Status: In Progress` al iniciar y de vuelta a
     `Done`/`Done` tras verificar el deploy.
+
+- **Reapertura (2026-08-05): corregir o revertir dirección.** Commit
+  `a754adf`, [PR #61](https://github.com/anomvlito/centralparking-mvp/pull/61),
+  merge `78020f72fd46269e9d195d4ff0b901d66a0f59c7`.
+  - Verificación: `unittest discover` 51 pruebas (7 skipped opt-in);
+    `RUN_DB_INTEGRATION_TESTS=1` contra Postgres real con patente sintética
+    `TSTX99` — corrección repetida `APPROACHING → DEPARTING → UNKNOWN` sobre
+    la misma detección y rechazo `409` tras conciliarla (`dismiss`);
+    `py_compile` y import de `api.detect:app` (49 rutas) correctos.
+  - Deploy VPS: workflow "Deploy Backend" — el primer intento
+    ([run 31039837652](https://github.com/anomvlito/centralparking-mvp/actions/runs/31039837652))
+    falló por `dial tcp ***:22: i/o timeout` (timeout de SSH del runner hacia
+    el VPS, no relacionado con el cambio; ya había un antecedente de la misma
+    falla transitoria el 2026-08-03). El reintento (`gh run rerun --failed`)
+    completó en 8s con `success`.
+  - Smoke: `centralparking.service` y `parking-watchdog.service` activos,
+    `/docs` HTTP 200, `openapi.json` expone `direction` con
+    `enum: [APPROACHING, DEPARTING, UNKNOWN]` en `DetectionActionRequest`,
+    `PATCH /api/detections/{id}` sin `Authorization` responde `401`.
+  - Issue #22 reabierto con comentario de trazabilidad; Project 4 movido a
+    `Etapa: In progress` / `Status: In Progress` al iniciar.
