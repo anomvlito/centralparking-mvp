@@ -117,3 +117,59 @@ class DirectionSettings:
 
 
 DIRECTION_SETTINGS = DirectionSettings.from_env()
+
+
+@dataclass(frozen=True)
+class VehicleFilterSettings:
+    """Filtro de vehículo (YOLOX-Nano/ONNX) previo al pipeline ALPR.
+
+    Mismo patrón de rollout seguro que ``DirectionSettings`` (ver ADR-004):
+    apagado por defecto y, al habilitarse, en modo sombra (audita, no
+    descarta) hasta una activación deliberada posterior.
+    """
+
+    enabled: bool = False
+    shadow_mode: bool = True
+    conf_threshold: float = 0.35
+
+    def __post_init__(self) -> None:
+        if not 0 < self.conf_threshold < 1:
+            raise ValueError(
+                "VEHICLE_FILTER_CONF_THRESH debe estar en el rango (0, 1)"
+            )
+        if not self.enabled and not self.shadow_mode:
+            raise ValueError(
+                "VEHICLE_FILTER_SHADOW_MODE debe ser true cuando "
+                "VEHICLE_FILTER_ENABLED es false"
+            )
+
+    @classmethod
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None
+    ) -> "VehicleFilterSettings":
+        env = os.environ if environ is None else environ
+        enabled = _as_bool(
+            env.get("VEHICLE_FILTER_ENABLED", "false"), "VEHICLE_FILTER_ENABLED"
+        )
+        if not enabled:
+            return cls()
+        shadow_mode = _as_bool(
+            env.get("VEHICLE_FILTER_SHADOW_MODE", "true"),
+            "VEHICLE_FILTER_SHADOW_MODE",
+        )
+        return cls(
+            enabled=enabled,
+            shadow_mode=shadow_mode,
+            conf_threshold=float(
+                env.get("VEHICLE_FILTER_CONF_THRESH", "0.35")
+            ),
+        )
+
+    @property
+    def mode(self) -> str:
+        if not self.enabled:
+            return "disabled"
+        return "shadow" if self.shadow_mode else "active"
+
+
+VEHICLE_FILTER_SETTINGS = VehicleFilterSettings.from_env()

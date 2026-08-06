@@ -32,6 +32,7 @@ from api.database import (
 from api.auth import get_current_user, require_admin
 from api.staging import calculate_quality_score, staging_submit
 from api.services.direction import direction_service
+from api.vehicle_detector import passes_vehicle_filter
 from api.video_processor import _process_video_task, VIDEO_RESULTS_DIR
 
 router = APIRouter()
@@ -257,6 +258,9 @@ async def ftp_image(image: UploadFile = File(...)):
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return {"plate": None, "registered": False, "error": "image_decode_failed"}
+
+    if not passes_vehicle_filter(img, "image"):
+        return {"plate": None, "registered": False, "error": "no_vehicle"}
 
     result = run_multi_strategy(img)
     if not result:

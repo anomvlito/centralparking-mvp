@@ -174,6 +174,14 @@ class ReoLinkFTPHandler(FileSystemEventHandler):
                 log.info(f"STG   {plate} {staging.get('action')} score={staging.get('combined_score', 0):.3f}")
                 _discard(path)
 
+            elif action is None and data.get("error") == "no_vehicle":
+                # Filtro de vehículo activo (ver ADR-004) sin shadow_mode:
+                # el backend ya decidió que no hay vehículo y ni siquiera
+                # corrió ALPR — no tiene sentido archivar en revisión, es
+                # justamente el espacio que el filtro busca ahorrar.
+                log.info("SKIP  sin vehículo (filtro pre-ALPR)")
+                _discard(path)
+
             else:
                 error = data.get("error", "desconocido")
                 log.info(f"MISS  {error}")

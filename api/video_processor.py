@@ -10,6 +10,7 @@ import shutil
 # Importing from the existing detecting module
 from api.detect import alpr, HAS_ML, extract_best_plate, strategy_clahe
 from api.services.direction import direction_service
+from api.vehicle_detector import passes_vehicle_filter
 
 router = APIRouter()
 
@@ -87,6 +88,14 @@ def _process_video_task(video_path: str, result_csv_path: str, auto_register: bo
 
         # If less than 1% of the pixels moved, assume it is empty or static
         if motion_ratio < 0.01:
+            continue
+
+        # Tier 2.5: Filtro de vehículo (ver ADR-004) — "algo se movió" no es
+        # "hay un vehículo" (viento, sombra, personas). Solo corre sobre los
+        # frames que ya pasaron el gate de movimiento, así que el costo
+        # extra es marginal frente al ahorro de saltar el pipeline pesado
+        # de patente (Tier 3) en frames sin vehículo.
+        if not passes_vehicle_filter(frame, "video"):
             continue
 
         # Tier 3: Multi-Strategy ALPR Detection (same as photos)
