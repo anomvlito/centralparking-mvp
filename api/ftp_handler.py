@@ -103,7 +103,8 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
                             strategy: str, img: np.ndarray = None,
                             center_y: float = None,
                             geometry_strategy: str = None,
-                            timestamp: float = None) -> dict:
+                            timestamp: float = None,
+                            detected_at: datetime.datetime = None) -> dict:
     """
     Registra cada lectura de patente como un avistamiento — sin decidir
     automáticamente si es entrada o salida.
@@ -121,6 +122,11 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
     decidirá más adelante cómo mostrar, por patente, las fotos de sus
     avistamientos. La apertura/cierre real de parking_sessions sigue
     siendo manual (/api/entry, /api/exit).
+
+    detected_at es opcional: se propaga a staging_submit() sin modificar.
+    El flujo de fotos (/api/ftp/image) no lo pasa (None → now() real, la
+    subida es casi inmediata). El flujo de video sí lo pasa (mtime del
+    .mp4 al llegar por FTP) — ver _process_ftp_video_and_register.
     """
     if is_plate_excluded(plate):
         _append_ftp_event(plate, source, confidence, strategy, action="IGNORED_MONTHLY")
@@ -153,7 +159,8 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
 
     # Calcular quality score y enviar a staging (decide ahí si guarda la imagen)
     quality = _quality_for(img, plate, confidence)
-    staging_result = staging_submit(plate, confidence, quality, strategy, img)
+    staging_result = staging_submit(plate, confidence, quality, strategy, img,
+                                     detected_at=detected_at)
     direction = direction_service.observe(
         plate=plate,
         center_y=center_y,
@@ -183,6 +190,22 @@ def _process_ftp_video_and_register(video_path: str, result_csv_path: str):
     # FTP). La limpieza del .mp4 fuente la hace watchdog_ftp.py (corre como
     # root), que espera a que result_csv_path exista y recién ahí lo borra.
     #
+    # mtime del archivo ANTES de entrar a la cola: es la mejor aproximación
+    # disponible a la hora real del pase del vehículo (el .mp4 ya llegó
+    # completo por FTP en este punto). Si se lee después del semáforo, un
+    # video que espera su turno detrás de otros (cola serializada, ver abajo)
+    # queda con la hora de cuando TERMINÓ de procesarse, no la del pase real
+    # — eso ya causó detecciones de un mismo pase separadas por varios
+    # minutos, suficiente para colarse en conciliación automática como si
+    # fueran una entrada y una salida reales (visto en producción 2026-08-06:
+    # mismo vehículo, mismo frame, dos "detecciones" 3-7 min separadas).
+    try:
+        detected_at = datetime.datetime.fromtimestamp(
+            os.path.getmtime(video_path), tz=datetime.timezone.utc
+        )
+    except OSError:
+        detected_at = None
+
     # El semáforo serializa el procesamiento pesado (ver definición arriba):
     # mientras un video espera turno acá no consume la memoria del decode +
     # multi-strategy ALPR, solo la ocupa el que está realmente corriendo.
@@ -208,6 +231,7 @@ def _process_ftp_video_and_register(video_path: str, result_csv_path: str):
             result = _handle_auto_detection(
                 plate, "video",
                 float(row.get("Confidence", 0)), "video_clahe", img=img,
+                detected_at=detected_at,
             )
             print(f"ftp_video {result['action']}: {plate}")
 
