@@ -4,6 +4,7 @@ opencv-python-headless
 numpy
 python-multipart
 fast-alpr
+onnxruntime
 psycopg2-binary
 openpyxl
 passlib[bcrypt]
