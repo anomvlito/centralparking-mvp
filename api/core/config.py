@@ -121,16 +121,22 @@ DIRECTION_SETTINGS = DirectionSettings.from_env()
 
 @dataclass(frozen=True)
 class VehicleFilterSettings:
-    """Filtro de vehículo (YOLOX-Nano/ONNX) previo al pipeline ALPR.
+    """Filtro de vehículo (YOLOX-Tiny/ONNX) previo al pipeline ALPR.
 
     Mismo patrón de rollout seguro que ``DirectionSettings`` (ver ADR-004):
     apagado por defecto y, al habilitarse, en modo sombra (audita, no
     descarta) hasta una activación deliberada posterior.
+
+    conf_threshold=0.20: calibrado contra 143 imágenes con vehículo
+    confirmado + 535 sin detección del 2026-08-06 (ver ADR-004, "Fix
+    2026-08-06") — a este umbral, con YOLOX-Tiny, los únicos descartes
+    fueron escenas nocturnas confirmadas sin vehículo (falsos positivos del
+    propio detector de patente), no autos reales perdidos.
     """
 
     enabled: bool = False
     shadow_mode: bool = True
-    conf_threshold: float = 0.35
+    conf_threshold: float = 0.20
 
     def __post_init__(self) -> None:
         if not 0 < self.conf_threshold < 1:
@@ -161,7 +167,7 @@ class VehicleFilterSettings:
             enabled=enabled,
             shadow_mode=shadow_mode,
             conf_threshold=float(
-                env.get("VEHICLE_FILTER_CONF_THRESH", "0.35")
+                env.get("VEHICLE_FILTER_CONF_THRESH", "0.20")
             ),
         )
 

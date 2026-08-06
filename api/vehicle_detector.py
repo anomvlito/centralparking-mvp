@@ -1,10 +1,19 @@
 """
 Filtro de vehículo — Central Parking MVP (ver ADR-004)
 
-Detector genérico COCO (YOLOX-Nano, ONNX, Apache 2.0) usado como gate barato
+Detector genérico COCO (YOLOX-Tiny, ONNX, Apache 2.0) usado como gate barato
 antes del pipeline de patente (12 estrategias, `api/detect.py`). Solo decide
 "¿hay un vehículo en esta imagen?" — no reemplaza ni interactúa con el
 modelo de patente (`yolo-v9-t-384-license-plate-end2end`).
+
+2026-08-06: se evaluó primero YOLOX-Nano, pero contra imágenes reales de
+este proyecto falló en casos claros (auto cerca y visible, sin oclusión,
+score 0.11 — ver ADR-004 "Fix 2026-08-06"). La cámara SALIDA es fisheye/gran
+angular y muy cercana al vehículo, una condición fuera de lo típico para un
+detector COCO genérico. YOLOX-Tiny (mismo origen, ~3x más pesado, 65ms/frame
+en este hardware) corrigió esos casos sin perder discriminación en escenas
+vacías — validado contra 143 imágenes con vehículo confirmado + 535 sin
+detección del 2026-08-06.
 
 Carga perezosa + fail-open: si el modelo no está disponible (sin internet en
 el primer arranque, ONNX corrupto, etc.), `has_vehicle()` siempre devuelve
@@ -24,10 +33,10 @@ from api.database import log_audit_event
 
 _MODEL_URL = (
     "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/"
-    "0.1.1rc0/yolox_nano.onnx"
+    "0.1.1rc0/yolox_tiny.onnx"
 )
 _MODEL_CACHE_DIR = os.path.expanduser("~/.cache/vehicle-filter")
-_MODEL_PATH = os.path.join(_MODEL_CACHE_DIR, "yolox_nano.onnx")
+_MODEL_PATH = os.path.join(_MODEL_CACHE_DIR, "yolox_tiny.onnx")
 _INPUT_SIZE = 416
 _PAD_VALUE = 114
 
@@ -61,7 +70,7 @@ try:
             _model_path, providers=["CPUExecutionProvider"]
         )
         HAS_VEHICLE_FILTER = True
-        print("vehicle_detector: filtro de vehículo online — YOLOX-Nano ONNX")
+        print("vehicle_detector: filtro de vehículo online — YOLOX-Tiny ONNX")
 except Exception as e:
     print(f"vehicle_detector: filtro offline ({e}) — fail-open, no filtra")
 
