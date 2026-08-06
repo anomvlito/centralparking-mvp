@@ -467,3 +467,65 @@ La conciliación usa transacción y locks; las pruebas usan patentes sintéticas
     post-implementación del 2026-07-24): es una corrección de un bug del
     contrato `detected_at`/`logged_at` de `DetectionEvent`, no un cambio de
     alcance de la HU.
+
+- **Fix post-implementación (2026-08-06): `detected_at` real del video (no
+  la hora de fin de procesamiento) en `staging_submit()`.** El administrador
+  reportó una sesión "completada" (misma patente registrada como entrada y
+  salida) que en realidad era el mismo pase real capturado dos veces.
+  Confirmado visualmente contra las imágenes reales: 5 sesiones del
+  2026-08-06 (`VVHJ88`, `KXBH84`, `GPHD26`, `LHRG10`, `CVTG23`) mostraban el
+  mismo vehículo, en la misma posición frente a la cámara SALIDA, con 0-30s
+  de diferencia real (hora quemada en la imagen), pero separadas por 3-7
+  minutos en `detection_log`.
+  Causa: el fix del 2026-08-05 (arriba) resolvió el desfase entre
+  `detected_at` (staging) y `logged_at` (promoción), pero no tocó cómo se
+  fija `detected_at` para detecciones de **video**. `staging_submit()`
+  insertaba esa columna con `DEFAULT now()` de Postgres, evaluado cuando se
+  ejecuta — para video, eso es cuando `_process_ftp_video_and_register()`
+  termina de procesar el `.mp4` completo (cientos de frames, ALPR
+  multi-estrategia) detrás de un semáforo que serializa un video a la vez
+  (`MAX_CONCURRENT_VIDEO_PROCESSING=1`). Si hay otros videos en cola, ese
+  delay puede ser de varios minutos — no la hora real del pase. El sistema
+  ya tenía una protección contra duplicados (`is_duplicate_duration()`,
+  umbral de 120s) que debería haber descartado estos pares, pero el
+  timestamp inflado por la cola superó el umbral y `auto_reconcile_exact_matches()`
+  los concilió como una entrada+salida real. Confirmado con
+  `journalctl -u centralparking.service`: el video que contenía la segunda
+  detección de `VVHJ88` esperó detrás de otro video en la cola antes de
+  procesarse.
+  Solución: `_process_ftp_video_and_register()` captura el mtime del `.mp4`
+  **antes** de entrar a la cola (el archivo ya llegó completo por FTP en ese
+  punto — mejor proxy disponible a la hora real sin analizar frame a frame)
+  y lo propaga como `detected_at` a través de `_handle_auto_detection()` →
+  `staging_submit()` → `staging_detections` (`COALESCE(%s, now())`, mismo
+  patrón que el fix anterior). El flujo de fotos no pasa `detected_at` — la
+  subida es casi inmediata a la captura, sigue usando `now()`.
+  Commit `ffa2c04`, [PR #65](https://github.com/anomvlito/centralparking-mvp/pull/65),
+  merge `365577997341231bf07eb806d647a1ff6263ccab`.
+  - Verificación: `unittest discover` 55 pruebas sin regresión (unit +
+    `RUN_DB_INTEGRATION_TESTS=1` contra Postgres real); nuevo
+    `tests/test_video_detected_at.py` — `staging_submit(detected_at=...)`
+    preserva la hora explícita, sin `detected_at` sigue usando `now()`;
+    `py_compile`, `git diff --check` e import de `api.detect:app` (49
+    rutas) correctos.
+  - Deploy VPS: [run 31108973883](https://github.com/anomvlito/centralparking-mvp/actions/runs/31108973883)
+    `success`; `centralparking.service`/`parking-watchdog.service` activos,
+    `/docs` HTTP 200, código desplegado en
+    `/opt/services/centralparking/deploy/backend` confirmado en el commit
+    del merge.
+  - Corrección de datos: las 5 sesiones confirmadas del 2026-08-06 se
+    marcaron `DUPLICATE`/`VOID` vía `review_session()` (mismo mecanismo
+    auditado que usa un administrador desde el dashboard, `reviewed_by`
+    asociado a la cuenta del administrador que autorizó la corrección) —
+    ids `6631`, `6626`, `6646`, `6645`, `6651`. No se borró evidencia ni
+    fotos; las sesiones quedan visibles con `status=VOID`.
+  - Alcance: cubre el flujo FTP de video
+    (`/api/ftp/video` → `_process_ftp_video_and_register`). Fuera de
+    alcance: endpoint standalone `/api/video/upload`
+    (`auto_register=True`, no pasa por staging); backfill del histórico
+    previo a este fix más allá de las 5 sesiones confirmadas
+    visualmente (no se asumió que las ~30 sesiones restantes con patrón
+    similar detectadas en el barrido de 2-10 min fueran todas duplicados
+    del mismo bug, sin confirmación visual).
+  - No se tocó Kanban/Project 4 para este fix (mismo criterio que los dos
+    fixes post-implementación anteriores).

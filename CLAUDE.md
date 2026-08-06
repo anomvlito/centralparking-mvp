@@ -170,6 +170,35 @@ log_to_db(plate, "DETECTED", ..., logged_at=row["detected_at"])
 
 ---
 
+### ✅ [RESUELTO] Video: `detected_at` Reflejaba la Hora de Fin de Procesamiento, no la Hora Real del Pase
+
+**Problema:** Sesiones "completadas" con la misma patente registrada como entrada y salida, siendo en realidad el mismo pase real capturado dos veces. Confirmado visualmente (2026-08-06): 5 sesiones mostraban el mismo auto, en la misma posición frente a cámara, con 0-30s de diferencia real, pero separadas 3-7 minutos en `detection_log`.
+
+**Ubicación:** `api/ftp_handler.py::_process_ftp_video_and_register()`, `api/staging.py::staging_submit()`
+
+**Causa:** El fix anterior (`logged_at` real al promover desde staging) resolvió el desfase entre `detected_at` y `logged_at`, pero no cómo se fija `detected_at` para **video**. `staging_submit()` insertaba esa columna con `DEFAULT now()`, evaluado cuando `_process_ftp_video_and_register()` termina de procesar el `.mp4` completo detrás de un semáforo que serializa un video a la vez (`MAX_CONCURRENT_VIDEO_PROCESSING=1`) — si hay otros videos en cola, el delay puede ser de varios minutos, no la hora real del pase. La protección existente contra duplicados (`is_duplicate_duration()`, umbral 120s) no alcanzaba a actuar porque el timestamp inflado por la cola superaba el umbral.
+
+**Solución aplicada:**
+```python
+# ftp_handler.py::_process_ftp_video_and_register()
+detected_at = datetime.datetime.fromtimestamp(
+    os.path.getmtime(video_path), tz=datetime.timezone.utc
+)  # ANTES de entrar a _video_semaphore
+...
+result = _handle_auto_detection(..., detected_at=detected_at)
+
+# staging.py::staging_submit()
+def staging_submit(..., detected_at: Optional[datetime.datetime] = None):
+    cur.execute("""
+        INSERT INTO staging_detections (..., detected_at)
+        VALUES (..., COALESCE(%s, now()))
+    """, (..., detected_at))
+```
+
+**Por qué funciona:** El mtime del `.mp4` se lee antes de encolarse — el archivo ya llegó completo por FTP en ese punto, es el mejor proxy disponible a la hora real del pase sin analizar frame a frame. El flujo de fotos no pasa `detected_at` (sigue usando `now()`, correcto porque la subida es casi inmediata a la captura).
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
