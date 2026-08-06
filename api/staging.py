@@ -117,13 +117,21 @@ def calculate_quality_score(img: np.ndarray, plate: str, confidence: float) -> d
 # ─────────────────────── Core deduplication ─────────────────────────────────
 
 def staging_submit(plate: str, confidence: float, quality: dict,
-                   strategy: Optional[str] = None, img: Optional[np.ndarray] = None) -> dict:
+                   strategy: Optional[str] = None, img: Optional[np.ndarray] = None,
+                   detected_at: Optional[datetime.datetime] = None) -> dict:
     """
     Ingresa una detección al buffer.
     Solo se escribe una imagen a disco por patente/ventana: la de mejor
     combined_score vigente. Las detecciones inferiores nunca tocan el disco,
     y si una nueva mejor reemplaza a la guardada, la anterior se borra.
     Retorna: {status: 'pending'|'rejected', action_taken, combined_score, image_path}
+
+    detected_at es opcional: por defecto usa now() de Postgres, correcto para
+    fotos (la subida es casi inmediata a la captura real). El flujo de video
+    (ver video_processor.py) sí lo pasa explícito — ahí "ahora" es el momento
+    en que termina de procesarse el video (puede ser varios minutos después
+    de la captura real si la cola de procesamiento está ocupada), no la hora
+    real del pase del vehículo.
     """
     combined = quality["combined_score"]
     expires_at = now_cl() + datetime.timedelta(seconds=STAGING_TTL_SECONDS)
@@ -156,12 +164,12 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                         INSERT INTO staging_detections
                             (plate, confidence, quality_score, combined_score,
                              sharpness, contrast_score, brightness_score, ocr_clarity,
-                             strategy, status, expires_at, image_path)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)
+                             strategy, status, expires_at, image_path, detected_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,COALESCE(%s, now()))
                     """, (plate, confidence, quality["quality_score"], combined,
                           quality["sharpness"], quality["contrast_score"],
                           quality["brightness_score"], quality["ocr_clarity"],
-                          strategy, expires_at, image_path))
+                          strategy, expires_at, image_path, detected_at))
                     _audit(plate, "SUPERSEDED",
                            {"old_score": float(existing["combined_score"]),
                             "new_score": combined})
@@ -173,12 +181,14 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                         INSERT INTO staging_detections
                             (plate, confidence, quality_score, combined_score,
                              sharpness, contrast_score, brightness_score, ocr_clarity,
-                             strategy, status, rejection_reason, expires_at, image_path)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'rejected','inferior_quality',%s,NULL)
+                             strategy, status, rejection_reason, expires_at, image_path,
+                             detected_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'rejected','inferior_quality',%s,NULL,
+                                COALESCE(%s, now()))
                     """, (plate, confidence, quality["quality_score"], combined,
                           quality["sharpness"], quality["contrast_score"],
                           quality["brightness_score"], quality["ocr_clarity"],
-                          strategy, expires_at))
+                          strategy, expires_at, detected_at))
                     result = {"status": "rejected", "action": "inferior_quality",
                               "combined_score": combined,
                               "best_score": float(existing["combined_score"]),
@@ -190,12 +200,12 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                     INSERT INTO staging_detections
                         (plate, confidence, quality_score, combined_score,
                          sharpness, contrast_score, brightness_score, ocr_clarity,
-                         strategy, status, expires_at, image_path)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)
+                         strategy, status, expires_at, image_path, detected_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,COALESCE(%s, now()))
                 """, (plate, confidence, quality["quality_score"], combined,
                       quality["sharpness"], quality["contrast_score"],
                       quality["brightness_score"], quality["ocr_clarity"],
-                      strategy, expires_at, image_path))
+                      strategy, expires_at, image_path, detected_at))
                 result = {"status": "pending", "action": "first_in_window",
                           "combined_score": combined, "image_path": image_path}
 
