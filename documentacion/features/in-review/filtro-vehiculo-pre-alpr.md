@@ -86,3 +86,18 @@ autorización explícita) activar el descarte real en producción.
 - `py_compile`, `git diff --check` e import de `api.detect:app` (49 rutas)
   correctos. `VEHICLE_FILTER_SETTINGS.mode == "disabled"` por defecto
   confirmado — sin cambio de comportamiento hasta activación explícita.
+
+- **Fix post-implementación (2026-08-06): `shadow_mode` activado en
+  producción + cambio de modelo (YOLOX-Nano → YOLOX-Tiny) y umbral
+  (0.35 → 0.20).** Con el filtro en `shadow_mode` real, se corrió un
+  backtest offline contra 143 imágenes con vehículo confirmado + 535 sin
+  detección del 2026-08-06. YOLOX-Nano falló en un caso claro (vehículo
+  cerca, sin oclusión, score 0.11) por la cámara fisheye/gran angular muy
+  cercana al vehículo — condición atípica para el dataset COCO. YOLOX-Tiny
+  corrigió ese caso (0.11 → 0.70) sin perder discriminación en escenas
+  vacías; con umbral 0.20 la tasa de falsos negativos sobre vehículos
+  reales fue efectivamente 0% en el dataset (los únicos descartes fueron
+  escenas nocturnas confirmadas sin vehículo, verificadas visualmente).
+  Ver [ADR-004](../../decisiones/ADR-004-filtro-vehiculo-preclasificador-onnx.md#fix-2026-08-06-yolox-nano--yolox-tiny-umbral-035--020)
+  para el detalle completo. `shadow_mode` sigue activo en producción — no
+  se activó el descarte real.

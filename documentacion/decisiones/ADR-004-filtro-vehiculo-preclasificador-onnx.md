@@ -79,6 +79,48 @@ filtro efectivamente evita correr ALPR y archivar en `/ftp/revisar`.
 Cualquier ampliación de alcance más allá de lo decidido acá requiere su
 propia HU o una revisión explícita de esta ADR.
 
+## Fix 2026-08-06: YOLOX-Nano → YOLOX-Tiny, umbral 0.35 → 0.20
+
+Con el filtro ya en `shadow_mode` en producción, se corrió un backtest
+offline contra las 678 imágenes reales del 2026-08-06 (143 en
+`/ftp/historico` con patente confirmada, 535 en `/ftp/revisar` sin
+detección) para calibrar antes de cualquier activación real.
+
+**Hallazgo:** con YOLOX-Nano y umbral 0.35, el 19.6% (28/143) de las
+imágenes con vehículo confirmado habría quedado por debajo del umbral.
+Revisando visualmente los casos más bajos, una parte eran en realidad
+escenas nocturnas vacías (el detector de patente había leído una patente
+falsa sin ningún vehículo presente — hallazgo aparte, no atribuible al
+filtro). Pero también apareció un caso de riesgo real y serio: un vehículo
+cerca de la cámara, claramente visible y sin oclusión, puntuó solo **0.11**.
+La cámara SALIDA es fisheye/gran angular y muy cercana al vehículo — una
+condición atípica para un detector COCO genérico entrenado en imágenes
+convencionales.
+
+Se probó reemplazar el modelo por **YOLOX-Tiny** (mismo origen Apache 2.0,
+~20MB vs. 3.6MB, ~65ms/frame vs. ~22ms en este hardware — costo asumible,
+sobre todo en video donde ya corre después del gate de movimiento). Contra
+el mismo dataset:
+
+- El caso de riesgo grave subió de 0.11 a **0.70**.
+- Con umbral 0.20, los únicos descartes (12/143) fueron, verificados uno
+  por uno visualmente, escenas nocturnas confirmadas sin vehículo — tasa de
+  falsos negativos sobre vehículos reales efectivamente 0% en este dataset.
+- El ahorro sobre `/ftp/revisar` se mantuvo significativo: 50.4% (umbral
+  0.20).
+
+**Decisión:** cambiar `api/vehicle_detector.py` a `yolox_tiny.onnx` y el
+default de `VehicleFilterSettings.conf_threshold` a `0.20`. Sigue en
+`shadow_mode` en producción — esta calibración reduce el riesgo antes de
+activar el descarte real, pero no lo reemplaza: la decisión de pasar a
+`shadow_mode=false` sigue pendiente de más señal en producción y
+autorización explícita.
+
+**No resuelto acá:** el hallazgo de que el detector de patente lee
+patentes falsas de noche sobre escenas vacías es una limitación del
+pipeline de patente en sí, no del filtro de vehículo — queda fuera de
+alcance de esta ADR.
+
 ## Referencias
 
 - `api/vehicle_detector.py` — wrapper ONNX del filtro.
