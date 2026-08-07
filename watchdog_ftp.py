@@ -182,6 +182,15 @@ class ReoLinkFTPHandler(FileSystemEventHandler):
                 log.info("SKIP  sin vehículo (filtro pre-ALPR)")
                 _discard(path)
 
+            elif action == "IGNORED_MONTHLY":
+                # La patente SÍ se leyó bien (está en plate_exclusions,
+                # ej. abonado mensual) — no es una detección fallida. Antes
+                # caía al else genérico y quedaba archivada como
+                # "_NO_DETECTADA" con "MISS desconocido", indistinguible de
+                # un fallo real de ALPR (285 casos en los últimos 7 días).
+                log.info(f"EXCL  {plate} (patente excluida)")
+                _discard(path)
+
             else:
                 error = data.get("error", "desconocido")
                 log.info(f"MISS  {error}")
