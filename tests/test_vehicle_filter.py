@@ -56,7 +56,12 @@ class PassesVehicleFilterTests(unittest.TestCase):
         self.assertTrue(result, "shadow_mode nunca debe bloquear el pipeline")
         mock_audit.assert_called_once()
         _, event_type, details = mock_audit.call_args[0]
-        self.assertEqual(event_type, "VEHICLE_FILTER_EVALUATED")
+        self.assertEqual(event_type, "VEHICLE_FILTER_EVAL")
+        self.assertLessEqual(
+            len(event_type), 20,
+            "event_type debe caber en audit_log.event_type VARCHAR(20) — "
+            "esto rompió producción por 27+ horas (StringDataRightTruncation)",
+        )
         self.assertTrue(details["shadow_mode"])
         self.assertEqual(details["source"], "video")
 
@@ -70,6 +75,25 @@ class PassesVehicleFilterTests(unittest.TestCase):
             result = vehicle_detector.passes_vehicle_filter(self.img, "image")
         self.assertFalse(result)
         mock_audit.assert_called_once()
+
+    def test_audit_failure_does_not_break_pipeline(self):
+        """Regresión: un fallo real en log_audit_event (ej. StringDataRight-
+        Truncation por un event_type demasiado largo para audit_log.event_type
+        VARCHAR(20)) rompió /api/ftp/image con 500 durante 27+ horas en
+        producción, porque la excepción no estaba contenida. La auditoría
+        nunca puede tumbar el pipeline real (mismo criterio que
+        DirectionService.observe)."""
+        settings = VehicleFilterSettings(enabled=True, shadow_mode=False)
+        with patch.object(
+            vehicle_detector, "VEHICLE_FILTER_SETTINGS", settings
+        ), patch.object(
+            vehicle_detector, "vehicle_score", return_value=0.1
+        ), patch.object(
+            vehicle_detector, "log_audit_event",
+            side_effect=Exception("StringDataRightTruncation"),
+        ):
+            result = vehicle_detector.passes_vehicle_filter(self.img, "image")
+        self.assertFalse(result)
 
     def test_active_mode_proceeds_when_vehicle_present(self):
         settings = VehicleFilterSettings(
