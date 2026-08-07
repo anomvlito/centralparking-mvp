@@ -133,12 +133,17 @@ def passes_vehicle_filter(img: np.ndarray, source: str) -> bool:
     score = vehicle_score(img)
     vehicle_present = score >= settings.conf_threshold
     if not vehicle_present:
-        log_audit_event(None, "VEHICLE_FILTER_EVALUATED", {
-            "score": round(score, 4),
-            "threshold": settings.conf_threshold,
-            "shadow_mode": settings.shadow_mode,
-            "source": source,
-        })
+        try:
+            log_audit_event(None, "VEHICLE_FILTER_EVAL", {
+                "score": round(score, 4),
+                "threshold": settings.conf_threshold,
+                "shadow_mode": settings.shadow_mode,
+                "source": source,
+            })
+        except Exception:
+            # La auditoría no puede romper el pipeline de detección real
+            # (mismo criterio que DirectionService._audit_sink).
+            pass
     if settings.shadow_mode:
         return True
     return vehicle_present
