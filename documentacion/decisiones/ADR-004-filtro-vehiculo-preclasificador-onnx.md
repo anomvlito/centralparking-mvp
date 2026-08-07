@@ -121,12 +121,115 @@ patentes falsas de noche sobre escenas vacías es una limitación del
 pipeline de patente en sí, no del filtro de vehículo — queda fuera de
 alcance de esta ADR.
 
+## Fix 2026-08-07: incidente de auditoría, intento de agrupamiento temporal descartado, y activación real con limpieza retroactiva
+
+### Incidente: `event_type` rompía `/api/ftp/image` con 500 (27+ horas)
+
+Con el filtro en `shadow_mode`, el nombre del evento de auditoría
+(`"VEHICLE_FILTER_EVALUATED"`, 24 caracteres) excedía
+`audit_log.event_type VARCHAR(20)`, y la excepción no estaba contenida —
+tumbaba la request completa. Impacto medido: 1652 requests fallidas entre
+el deploy del 2026-08-06 14:57 UTC y el fix del 2026-08-07 18:07 UTC.
+Cada imagen afectada quedó archivada como `_ERROR` en `/ftp/revisar` sin
+pasar nunca por el pipeline de patente — `shadow_mode` debía auditar sin
+afectar comportamiento y en la práctica sí lo rompió. Detalle completo en
+`CLAUDE.md` ("Bugs Resueltos"). Fix: acortar el nombre a 19 caracteres y
+envolver la auditoría en `try/except` (mismo criterio que
+`DirectionService._audit_sink`) para que un fallo de auditoría, de esta
+causa o de cualquier otra, no vuelva a poder tumbar el pipeline real.
+
+### Intento de agrupamiento temporal (descartado)
+
+Antes de considerar activar el descarte real, se investigó si agrupar
+capturas cercanas en el tiempo (ventana de 90s) y mirar el **área máxima
+de la caja detectada** en toda la ráfaga —en vez del score de un frame
+aislado— daba una señal más confiable. La hipótesis: un vehículo entrando
+de verdad crece de tamaño entre capturas sucesivas; tráfico de calle no.
+
+Validado en 4 casos reales (secuencias 09:43-09:45, 09:52-09:53, el sedán
+azul de `09-24-28`/`09-24-32`, y la ráfaga de `10-35-00`) con buenos
+resultados — pero al aplicar el mismo criterio contra un grupo nuevo
+(`13-12-46`/`51`/`54`, 2026-08-06) se encontró un vehículo grande, claro,
+centrado en el cuadro, con conductor visible, al que el modelo le calculó
+un área de caja de apenas **0.62%** — muy por debajo del umbral de área
+usado (3%). No fue un caso de borde de frame ni de objeto parcial: el
+auto dominaba la imagen y aun así la estimación de tamaño del modelo
+falló.
+
+**Conclusión:** dos señales distintas del mismo modelo (score de
+confianza y área de caja) fallan de forma impredecible con vehículos
+obvios y cercanos en esta cámara específica — no es un problema de
+umbral, sino de que YOLOX-Tiny (entrenado en fotos convencionales de
+COCO) no maneja bien el encuadre fisheye extremo de esta cámara cuando
+el vehículo está muy cerca. Se descartó el agrupamiento temporal como
+base para decisiones de borrado automatizado.
+
+### Opción evaluada y no ejecutada: modelo propio ajustado a esta cámara
+
+Se escopeó entrenar un clasificador binario ("¿imagen útil o no?") a
+partir de datos reales de este local — `/ftp/historico` ya tiene ~7219
+capturas con detección exitosa confirmada, positivos gratis sin etiquetar
+a mano. Bloqueadores identificados: esta VPS no tiene GPU, 2 vCPU, sin
+PyTorch instalado, y el disco estaba en 95-97% de uso durante esta
+investigación — entrenar (o incluso armar el dataset) acá es de alto
+riesgo. Recomendación no ejecutada: entrenar fuera de la VPS y traer solo
+el modelo `.onnx` resultante. **No se implementó** — queda como
+alternativa futura si se decide invertir en ello.
+
+### Decisión: activar `shadow_mode=false` igual, con riesgo conocido y explícito
+
+Dado que ningún enfoque automatizado probado (umbral simple, recorte
+espacial, mosaico, detector de patente crudo, agrupamiento temporal) es
+confiable para esta cámara, y con el disco en estado crítico (95%, luego
+86% tras liberar un backup redundante), se presentó el riesgo documentado
+explícitamente al administrador — incluyendo ejemplos concretos de
+vehículos reales mal clasificados (bus, camioneta pickup, sedán a 0.099,
+sedán centrado a 0.62% de área) — y se autorizó activar
+`VEHICLE_FILTER_SHADOW_MODE=false` de todas formas, explícitamente
+enmarcado como prueba ("vamos a utilizarlo para probar"), no como una
+calibración ya validada.
+
+Cambio aplicado vía drop-in de systemd (mismo mecanismo que la activación
+de `shadow_mode`, ver historial de HU-004):
+```
+# /etc/systemd/system/centralparking.service.d/30-vehicle-filter.conf
+Environment=VEHICLE_FILTER_ENABLED=true
+Environment=VEHICLE_FILTER_SHADOW_MODE=false
+```
+
+### Limpieza retroactiva de `/ftp/revisar/2026-08-07`
+
+A pedido explícito, se aplicó el mismo criterio (YOLOX-Tiny, umbral 0.20,
+sin agrupamiento) para revisar y borrar retroactivamente
+`/ftp/revisar/2026-08-07` — la activación de `shadow_mode=false` sólo
+afecta capturas nuevas, no limpia lo ya archivado.
+
+- Backup previo verificado: 693/693 archivos, `backups/revisar-20260807-pre-cleanup/`.
+- De 261 imágenes candidatas (score < 0.20), se revisaron 3 visualmente
+  antes de ejecutar: 2 resultaron ser vehículos reales mal clasificados
+  (excluidas manualmente del borrado), 1 confirmada vacía.
+- Se borraron **259 imágenes**. Las 261 candidatas **no se revisaron una
+  por una** — es muy probable que haya vehículos reales entre las 259
+  borradas que ya no se pueden recuperar salvo desde el backup.
+- `/ftp/revisar/2026-08-06` (2522 imágenes) **no se tocó** — sólo se
+  investigó y respaldó; no se ejecutó limpieza retroactiva ahí.
+
+### Estado al cierre de esta entrada
+
+`shadow_mode=false` activo en producción (filtro descartando capturas
+nuevas en tiempo real, sin revisión humana). Riesgo de falsos negativos
+sobre vehículos reales confirmado y aceptado explícitamente por el
+administrador como parte de una prueba en curso, no como una decisión
+final validada con datos suficientes.
+
 ## Referencias
 
 - `api/vehicle_detector.py` — wrapper ONNX del filtro.
 - `api/core/config.py::VehicleFilterSettings` — configuración y flags.
 - `api/ftp_handler.py::ftp_image()`, `api/video_processor.py::_process_video_task()` —
   puntos de integración.
+- `/etc/systemd/system/centralparking.service.d/30-vehicle-filter.conf` —
+  activación real en el VPS (fuera de git, ver OPERATIONS.md).
 - [ADR-001 — Reactivar DirectionTracker acotado](./ADR-001-reactivar-direction-tracker-acotado.md) —
   mismo patrón de rollout seguro (flag apagado + modo observación primero)
   para un clasificador probabilístico nuevo.

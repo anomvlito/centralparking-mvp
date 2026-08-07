@@ -99,5 +99,37 @@ autorización explícita) activar el descarte real en producción.
   reales fue efectivamente 0% en el dataset (los únicos descartes fueron
   escenas nocturnas confirmadas sin vehículo, verificadas visualmente).
   Ver [ADR-004](../../decisiones/ADR-004-filtro-vehiculo-preclasificador-onnx.md#fix-2026-08-06-yolox-nano--yolox-tiny-umbral-035--020)
-  para el detalle completo. `shadow_mode` sigue activo en producción — no
+  para el detalle completo.
+
+- **Fix post-implementación (2026-08-07): incidente de auditoría, intento
+  de agrupamiento temporal descartado, activación real con riesgo
+  conocido y limpieza retroactiva.** Tres cosas separadas, todas el mismo
+  día:
+  1. Incidente: `event_type` de auditoría (24 caracteres) excedía
+     `audit_log.event_type VARCHAR(20)`, rompiendo `/api/ftp/image` con
+     500 sin importar `shadow_mode` — 1652 requests fallidas en ~27 horas
+     desde el deploy del 2026-08-06. Fix + `try/except` de fondo (ver
+     `CLAUDE.md`).
+  2. Se investigó agrupar capturas cercanas en el tiempo y mirar el área
+     máxima de caja detectada en la ráfaga, buscando una señal más
+     confiable que el score de un frame aislado. Se descartó: un vehículo
+     grande y centrado en el cuadro recibió un área de caja de 0.62%,
+     muy por debajo del umbral usado — ni el score ni el área son
+     confiables para descarte automatizado en esta cámara.
+  3. Se evaluó (sin ejecutar) entrenar un clasificador propio con datos
+     reales de este local — bloqueado por falta de GPU/PyTorch en la VPS
+     y disco crítico (95-97% de uso durante la investigación).
+  4. Con esa evidencia sobre la mesa, se autorizó explícitamente activar
+     `VEHICLE_FILTER_SHADOW_MODE=false` de todas formas, enmarcado como
+     prueba en curso — y se aplicó limpieza retroactiva manual sobre
+     `/ftp/revisar/2026-08-07`: de 261 candidatas bajo el umbral, se
+     revisaron 3 visualmente (2 resultaron ser vehículos reales, excluidas
+     del borrado) y se borraron 259 sin revisión individual del resto.
+     `/ftp/revisar/2026-08-06` no se tocó.
+
+  Ver [ADR-004](../../decisiones/ADR-004-filtro-vehiculo-preclasificador-onnx.md),
+  sección "Fix 2026-08-07", para el detalle completo. **Estado actual:
+  `shadow_mode=false` activo en
+  producción — el filtro descarta capturas nuevas en tiempo real, sin
+  revisión humana, con el riesgo de falso negativo ya documentado.**
   se activó el descarte real.
