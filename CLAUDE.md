@@ -199,6 +199,35 @@ def staging_submit(..., detected_at: Optional[datetime.datetime] = None):
 
 ---
 
+### ✅ [RESUELTO] Filtro de Vehículo: `event_type` Demasiado Largo Rompía `/api/ftp/image` con 500 (27+ horas en producción)
+
+**Problema:** Desde el deploy del filtro de vehículo (2026-08-06 14:57 UTC), `/api/ftp/image` devolvía `500 Internal Server Error` cada vez que el filtro evaluaba "no hay vehículo" — sin importar `shadow_mode`. Impacto medido: **1652 requests fallidas en ~27 horas**. Cada imagen afectada quedó archivada como `_ERROR` en `/ftp/revisar` **sin pasar nunca por el pipeline de patente** (`run_multi_strategy` nunca se llamó) — incluyendo mientras el filtro estaba en `shadow_mode` (que debía auditar sin afectar el comportamiento, y en la práctica sí lo rompió).
+
+**Ubicación:** `api/vehicle_detector.py::passes_vehicle_filter()`
+
+**Causa:** `audit_log.event_type` es `VARCHAR(20)`. El código escribía `"VEHICLE_FILTER_EVALUATED"` (24 caracteres) → `psycopg2.errors.StringDataRightTruncation`. La excepción no estaba contenida, así que tumbaba la request completa en vez de solo fallar la auditoría.
+
+**Solución aplicada:**
+```python
+# vehicle_detector.py::passes_vehicle_filter()
+if not vehicle_present:
+    try:
+        log_audit_event(None, "VEHICLE_FILTER_EVAL", {  # 19 caracteres, cabe en VARCHAR(20)
+            "score": round(score, 4),
+            "threshold": settings.conf_threshold,
+            "shadow_mode": settings.shadow_mode,
+            "source": source,
+        })
+    except Exception:
+        # La auditoría no puede romper el pipeline de detección real
+        # (mismo criterio que DirectionService._audit_sink).
+        pass
+```
+
+**Por qué funciona:** El nombre corto (19 caracteres, mismo patrón que `"DIRECTION_EVALUATED"`, 19 caracteres, ya usado en el proyecto) evita la causa puntual. El `try/except` es la corrección de fondo: cualquier fallo futuro en la auditoría —de esta causa o de otra— nunca vuelve a poder tumbar el pipeline real, igual que ya garantiza `DirectionService.observe()` para su propio audit_sink.
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
