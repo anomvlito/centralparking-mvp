@@ -1,6 +1,6 @@
 # Feature — Consolidación difusa de avistamientos por ráfaga de OCR inconsistente
 
-**Etapa Project 4:** `In progress` (sin tarjeta en Project 4 — no se creó
+**Etapa Project 4:** `Done` (sin tarjeta en Project 4 — no se creó
 issue, trabajo técnico sin actor asociado)
 **HUs relacionadas:** ninguna — feature técnica (AGENTS.md: "trabajo
 puramente técnico... no se fuerza a una HU").
@@ -91,3 +91,27 @@ real en producción.
   y el incidente de desarrollo (28 avistamientos reales marcados
   `DISMISSED` por error durante una prueba con el diseño anterior,
   revertidos de inmediato).
+
+## Activación en producción (2026-08-10)
+
+- **Calibración en `shadow_mode`:** corrida contra el tráfico real del día
+  (39 grupos detectados, solo auditados). Muestra de 5 grupos verificada
+  visualmente contra las imágenes reales de `/ftp/historico/2026-08-10`
+  (`HGYB41`/`BGYB41`, `SHKV20`/`PHKV20`, `ZP2127`/`ZP2117`,
+  `RXLY54`/`CXLY54`, además del caso original `PCYD65`) — en los 5 casos la
+  ganadora elegida coincide con lo que se ve a simple vista en la foto,
+  ninguna fusión mezcla dos vehículos distintos.
+- **Activación real:** `SIGHTING_CONSOLIDATION_SHADOW_MODE=false` (drop-in
+  `/etc/systemd/system/centralparking.service.d/40-sighting-consolidation.conf`).
+  Corrida manual contra el día: 39 grupos, 34 avistamientos marcados
+  `DISMISSED` (los 5 restantes ya habían sido resueltos por la conciliación
+  de estadías, sin fila que tocar).
+- **Enganche al frontend:** `consolidateFuzzySightings(date)` agregado al
+  refresco automático del dashboard (`Dashboard.tsx::load()`, cada
+  `DASHBOARD_REFRESH_MS` = 15s mientras esté abierto), mismo patrón ya
+  usado por `autoReconcileExact` — sin botón ni acción nueva del admin.
+  Frontend: [adyac-camaras-frontend#15](https://github.com/anomvlito/adyac-camaras-frontend/pull/15),
+  Vercel Production verificado (`commit status: success`).
+- **Límite conocido:** solo corre mientras el dashboard está abierto (no es
+  un cron real en el backend) — decisión aparte si se quiere independizar
+  de eso.
