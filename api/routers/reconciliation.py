@@ -108,7 +108,7 @@ async def auto_reconcile_exact(
 @router.post("/api/sightings/consolidate-fuzzy")
 async def consolidate_fuzzy_sightings_endpoint(
     date: str,
-    limit: int = Query(500, ge=1, le=500),
+    limit: int = Query(2000, ge=1, le=2000),
     _: dict = Depends(require_admin),
 ):
     try:
