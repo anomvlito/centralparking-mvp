@@ -1,6 +1,7 @@
 from api.database import (
     add_plate_exclusion,
     auto_reconcile_exact_matches,
+    consolidate_fuzzy_sightings,
     dismiss_detection_event,
     get_detection_events,
     get_parking_stays,
@@ -27,6 +28,10 @@ def list_proposals(date, limit=100):
 
 def reconcile_exact(date, limit=200):
     return auto_reconcile_exact_matches(date=date, limit=limit)
+
+
+def consolidate_fuzzy(date, limit=500):
+    return consolidate_fuzzy_sightings(date=date, limit=limit)
 
 def create_plate_exclusion(plate, max_distance, username):
     return add_plate_exclusion(plate, max_distance, username)

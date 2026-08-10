@@ -255,6 +255,39 @@ add_pairs(1, "FUZZY")
 
 ---
 
+### ✅ [RESUELTO] Prueba de Integración Marcó 28 Avistamientos Reales como DISMISSED por Error (desarrollo, revertido)
+
+**Problema:** Durante el desarrollo de la consolidación difusa de avistamientos (ver ADR-005), una prueba de integración para `consolidate_fuzzy_sightings()` corrió en modo activo contra Postgres real y marcó **28 avistamientos reales** de producción (2026-08-10) como `match_status = 'DISMISSED'` — patentes reales como `SHKV20`, `FBYD25`, `VBCH38`, entre otras. Detectado antes de seguir adelante, revisando `audit_log`; ninguna imagen ni patente original se tocó (el borrado solo afecta interpretación, nunca evidencia).
+
+**Ubicación:** `tests/test_sighting_consolidation_integration.py`
+
+**Causa:** A diferencia del resto de `test_reconciliation_integration.py` (que opera sobre IDs sintéticos puntuales pasados explícitamente a la función bajo prueba), `consolidate_fuzzy_sightings(date)` escanea **todo el día** por diseño — no hay forma de acotarla a datos sintéticos desde afuera. La prueba usaba `_db()` real (con commit automático) sin ningún aislamiento, así que el modo activo de la prueba ejecutó el `UPDATE ... SET match_status = 'DISMISSED'` real contra cualquier grupo que el (entonces defectuoso) algoritmo encontrara en el tráfico real del día, no solo contra las filas sintéticas del test.
+
+**Solución aplicada:**
+1. Corrección inmediata en producción: `UPDATE detection_log SET match_status = 'UNMATCHED' WHERE id IN (...)` para las 28 filas afectadas, más un evento `SIGHTING_UNDO` en `audit_log` documentando la reversión.
+2. Corrección de fondo — las pruebas de integración ahora corren dentro de una única transacción que **siempre se revierte**, sin importar el resultado:
+```python
+class _NoCommitConnection:
+    def __init__(self, real_conn):
+        self._real = real_conn
+    def cursor(self, *a, **kw):
+        return self._real.cursor(*a, **kw)
+    def commit(self):
+        pass  # nunca persiste
+    def rollback(self):
+        self._real.rollback()
+    def close(self):
+        pass
+
+# setUp(): abre una conexión real, la envuelve, parchea api.database._db
+# para que devuelva SIEMPRE esa misma conexión envuelta.
+# tearDown(): un único rollback real + close.
+```
+
+**Por qué funciona:** `commit()` neutralizado significa que ninguna escritura de la función bajo prueba (ni de los helpers de setup del propio test, que usan la misma conexión) persiste jamás — el `rollback()` real en `tearDown()` deshace todo, pase o falle el test. Cualquier función futura que opere por fecha/rango en vez de por ID específico debe probarse con este mismo patrón contra Postgres real, no con el patrón de limpieza manual (`DELETE ... WHERE plate = %s`) que alcanza para funciones acotadas a IDs sintéticos.
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:

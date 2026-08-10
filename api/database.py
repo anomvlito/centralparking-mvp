@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from api.core.config import SIGHTING_CONSOLIDATION_SETTINGS
+
 _CL = ZoneInfo("America/Santiago")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
@@ -807,6 +809,159 @@ def consolidate_short_entry_duplicates(
                 }),))
                 consolidated += 1
     return consolidated
+
+
+def _majority_plate(cluster: list[dict]) -> str:
+    """Patente ganadora de un grupo: la que más veces se repite igual entre
+    las lecturas crudas (no la de mayor confianza individual — ver ADR-005,
+    caso real donde una lectura incorrecta ganó por 0.0002 de diferencia).
+    Empate en cantidad se desempata por confianza promedio.
+    """
+    counts: dict[str, int] = {}
+    for read in cluster:
+        counts[read["plate"]] = counts.get(read["plate"], 0) + 1
+    top_count = max(counts.values())
+    tied = [plate for plate, count in counts.items() if count == top_count]
+    if len(tied) == 1:
+        return tied[0]
+
+    def avg_confidence(plate: str) -> float:
+        values = [r["confidence"] for r in cluster if r["plate"] == plate]
+        return sum(values) / len(values)
+
+    return max(tied, key=avg_confidence)
+
+
+def _cluster_staging_reads(
+    reads: list[dict], window_seconds: int, max_distance: int
+) -> list[list[dict]]:
+    """Agrupa lecturas crudas de staging (ya filtradas por confianza mínima)
+    cuando llegan dentro de ``window_seconds`` del último miembro de un
+    grupo y su patente está a distancia <= ``max_distance`` de la patente
+    mayoritaria del grupo hasta el momento — ver ADR-005. Solo devuelve
+    grupos con más de una patente *distinta*; varias lecturas repitiendo la
+    misma patente no son una ambigüedad a resolver (staging ya las dedupe).
+    """
+    valid = sorted(
+        [r for r in reads if len(r["plate"]) == 6],
+        key=lambda r: r["detected_at"],
+    )
+    clusters: list[list[dict]] = []
+    for read in valid:
+        placed = False
+        for cluster in reversed(clusters):
+            if (read["detected_at"] - cluster[-1]["detected_at"]).total_seconds() > window_seconds:
+                continue
+            representative = _majority_plate(cluster)
+            if _levenshtein(read["plate"], representative) <= max_distance:
+                cluster.append(read)
+                placed = True
+                break
+        if not placed:
+            clusters.append([read])
+    return [
+        cluster for cluster in clusters
+        if len({read["plate"] for read in cluster}) > 1
+    ]
+
+
+def _get_staging_reads_for_date(date: str, limit: int = 2000) -> list[dict]:
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT plate, confidence, detected_at
+                FROM staging_detections
+                WHERE (detected_at AT TIME ZONE 'America/Santiago')::date = %s::date
+                ORDER BY detected_at
+                LIMIT %s
+            """, (date, limit))
+            rows = cur.fetchall()
+    return [
+        {
+            "plate": row["plate"],
+            "confidence": float(row["confidence"]),
+            "detected_at": row["detected_at"],
+        }
+        for row in rows
+    ]
+
+
+def consolidate_fuzzy_sightings(date: str, limit: int = 2000) -> dict:
+    """Agrupa lecturas de staging que son casi seguro el mismo vehículo leído
+    con OCR inconsistente en una misma ráfaga (ver ADR-005, caso real
+    2026-08-10: PCYD65 leído también como CCYD65/PCYD55/HCYD63/HCYD05/
+    PCY8655/HCYD65/PCYI65 en 54s). Filtra por confianza cruda mínima antes de
+    votar; la patente ganadora es la mayoritaria entre las lecturas que
+    pasan el filtro (ver ``_majority_plate``), no la de mayor confianza
+    individual. Los avistamientos promovidos (``detection_log``) de las
+    patentes perdedoras del grupo pasan a DISMISSED; el resto nunca se toca.
+    Nunca borra imágenes ni sobrescribe la lectura original de ninguna
+    detección (mismo contrato que el resto de la conciliación: "evidencia y
+    OCR original son inmutables").
+    """
+    settings = SIGHTING_CONSOLIDATION_SETTINGS
+    reads = _get_staging_reads_for_date(date, limit=limit)
+    reads = [r for r in reads if r["confidence"] >= settings.min_confidence]
+    clusters = _cluster_staging_reads(
+        reads,
+        window_seconds=settings.window_seconds,
+        max_distance=settings.max_distance,
+    )
+
+    groups_found = 0
+    dismissed = 0
+    with _db() as conn:
+        with conn.cursor() as cur:
+            for cluster in clusters:
+                winner = _majority_plate(cluster)
+                loser_plates = sorted({
+                    read["plate"] for read in cluster if read["plate"] != winner
+                })
+                loser_timestamps = [
+                    read["detected_at"] for read in cluster
+                    if read["plate"] in loser_plates
+                ]
+                cur.execute("""
+                    SELECT id, plate FROM detection_log
+                    WHERE normalized_plate = ANY(%s)
+                      AND match_status = 'UNMATCHED'
+                      AND logged_at = ANY(%s)
+                """, (loser_plates, loser_timestamps))
+                loser_rows = cur.fetchall()
+                loser_ids = [int(row["id"]) for row in loser_rows]
+
+                groups_found += 1
+                details = {
+                    "winner_plate": winner,
+                    "loser_plates": loser_plates,
+                    "loser_detection_ids": loser_ids,
+                    "distinct_plates": sorted({r["plate"] for r in cluster}),
+                    "cluster_reads": len(cluster),
+                    "window_seconds": settings.window_seconds,
+                    "max_distance": settings.max_distance,
+                    "min_confidence": settings.min_confidence,
+                    "shadow_mode": settings.shadow_mode,
+                    "applied": not settings.shadow_mode,
+                }
+                cur.execute("""
+                    INSERT INTO audit_log (plate, event_type, details)
+                    VALUES (%s, 'SIGHTING_CONSOLID', %s::jsonb)
+                """, (winner, json.dumps(details)))
+
+                if not settings.shadow_mode and loser_ids:
+                    cur.execute("""
+                        UPDATE detection_log
+                        SET match_status = 'DISMISSED'
+                        WHERE id = ANY(%s) AND match_status = 'UNMATCHED'
+                    """, (loser_ids,))
+                    dismissed += cur.rowcount
+
+    return {
+        "date": date,
+        "groups_found": groups_found,
+        "dismissed": dismissed if not settings.shadow_mode else 0,
+        "shadow_mode": settings.shadow_mode,
+    }
 
 
 def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
