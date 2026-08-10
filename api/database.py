@@ -653,6 +653,16 @@ _DETECTION_MATCH_STATUSES = {
     "INVALID_FORMAT",
 }
 
+# 2026-08-10: un auto que espera cupo en la entrada puede quedar ~2-3 minutos
+# frente a la cámara antes de estacionar, generando dos avistamientos
+# separados de la misma patente (el buffer de staging solo fusiona
+# detecciones dentro de STAGING_TTL_SECONDS = 120s). Sin este mínimo,
+# auto_reconcile_exact_matches los tomaba como una estadía real EXACT de
+# pocos minutos — el auto nunca se fue (caso real: SHKV20, sesión 6753).
+# Alineado con PLATE_FUZZY_WINDOW_MIN (5 min, ya usado como "misma visita"
+# en otro lugar de este archivo).
+STAY_MIN_DURATION_SECONDS = int(os.environ.get("STAY_MIN_DURATION_SECONDS", "300"))
+
 
 def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
     valid = sorted(
@@ -663,7 +673,7 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
     proposals: list[dict] = []
     max_seconds = max_hours * 3600
 
-    def add_pairs(max_distance: int, match_type: str) -> None:
+    def add_pairs(max_distance: int, match_type: str, min_seconds: int = 0) -> None:
         for index, entry in enumerate(valid):
             if entry["detection_id"] in used:
                 continue
@@ -675,7 +685,7 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
                     datetime.datetime.fromisoformat(exit_event["detected_at"])
                     - datetime.datetime.fromisoformat(entry["detected_at"])
                 ).total_seconds()
-                if seconds <= 0 or seconds > max_seconds:
+                if seconds <= 0 or seconds > max_seconds or seconds < min_seconds:
                     continue
                 distance = _levenshtein(
                     entry["normalized_plate"], exit_event["normalized_plate"]
@@ -704,7 +714,7 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
                 "duration_minutes": int(best[2] // 60),
             })
 
-    add_pairs(0, "EXACT")
+    add_pairs(0, "EXACT", min_seconds=STAY_MIN_DURATION_SECONDS)
     add_pairs(1, "FUZZY")
     return sorted(proposals, key=lambda item: item["exit"]["detected_at"], reverse=True)
 

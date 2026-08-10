@@ -67,6 +67,39 @@ class ReconciliationServiceTests(unittest.TestCase):
         self.assertEqual(proposals[0]["match_type"], "EXACT")
         self.assertEqual(proposals[0]["duration_minutes"], 120)
 
+    def test_short_gap_same_plate_does_not_become_exact(self):
+        """Regresión 2026-08-10: SHKV20 esperó ~2m30s cupo en la entrada y
+        generó dos avistamientos separados (fuera de STAGING_TTL_SECONDS =
+        120s), que auto_reconcile_exact_matches tomó como una estadía EXACT
+        real de pocos minutos — el auto nunca se fue. Con
+        STAY_MIN_DURATION_SECONDS el par ya no califica como EXACT (cae a
+        FUZZY, que solo se auto-reconcilia si dura <= 1 minuto)."""
+        events = [
+            self._event(1, "SHKV20", "2026-08-10T09:42:04-04:00"),
+            self._event(2, "SHKV20", "2026-08-10T09:44:34-04:00"),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertNotEqual(proposals[0]["match_type"], "EXACT")
+
+    def test_exact_requires_minimum_duration(self):
+        events = [
+            self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),
+            self._event(2, "ABC123", "2026-07-28T08:04:59-04:00"),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertNotEqual(proposals[0]["match_type"], "EXACT")
+
+    def test_exact_allowed_at_minimum_duration_boundary(self):
+        events = [
+            self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),
+            self._event(2, "ABC123", "2026-07-28T08:05:00-04:00"),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["match_type"], "EXACT")
+
     def test_fuzzy_proposal_requires_distance_one_and_window(self):
         events = [
             self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),

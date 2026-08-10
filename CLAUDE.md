@@ -228,6 +228,33 @@ if not vehicle_present:
 
 ---
 
+### ✅ [RESUELTO] Conciliación Automática Cerraba Estadías Falsas de Autos que Esperaban Cupo en la Entrada
+
+**Problema:** Un auto que espera unos minutos frente a la cámara antes de poder estacionar (cupo ocupado) generaba dos avistamientos separados de la misma patente. `auto_reconcile_exact_matches` los tomó como una entrada+salida real ("EXACT"), cerrando una estadía de pocos minutos que nunca ocurrió — el auto seguía adentro. Caso real detectado por el usuario: `SHKV20`, 2026-08-10, sesión `parking_sessions.id = 6753` (entrada 09:42:04, "salida" falsa 09:44:34, 2m30s después). Corregido manualmente en producción: se reabrió la sesión y se revirtió la detección de salida a `UNMATCHED`.
+
+**Ubicación:** `api/database.py::build_stay_proposals()`
+
+**Causa:** El emparejamiento `EXACT` solo exigía patente idéntica, orden cronológico y una diferencia menor a `max_hours` (24h por defecto) — sin ningún mínimo de tiempo. El buffer de staging (`STAGING_TTL_SECONDS = 120s`) solo fusiona detecciones dentro de una ventana de 2 minutos; un auto que demora más que eso en encontrar cupo genera un segundo avistamiento fuera de esa ventana, indistinguible para el emparejador de una salida real.
+
+**Solución aplicada:**
+```python
+# database.py
+STAY_MIN_DURATION_SECONDS = int(os.environ.get("STAY_MIN_DURATION_SECONDS", "300"))
+
+def add_pairs(max_distance: int, match_type: str, min_seconds: int = 0) -> None:
+    ...
+    if seconds <= 0 or seconds > max_seconds or seconds < min_seconds:
+        continue
+    ...
+
+add_pairs(0, "EXACT", min_seconds=STAY_MIN_DURATION_SECONDS)
+add_pairs(1, "FUZZY")
+```
+
+**Por qué funciona:** Un par que antes calificaba como `EXACT` con menos de 5 minutos de diferencia ahora cae a `FUZZY` (mismo par, sin `used` marcado por el primer paso). `auto_reconcile_exact_matches` solo reconcilia automáticamente `FUZZY` cuando dura ≤ 1 minuto (duplicado de re-lectura), así que un caso como este queda disponible en `/api/stay-proposals` para revisión manual en vez de auto-cerrarse como una estadía real. El umbral (5 min) está alineado con `PLATE_FUZZY_WINDOW_MIN`, ya usado en este archivo con el mismo criterio de "misma visita".
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
