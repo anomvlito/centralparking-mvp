@@ -7,6 +7,7 @@ from api.schemas.reconciliation import (
     ReconcileStayRequest,
 )
 from api.services.reconciliation import (
+    consolidate_fuzzy,
     dismiss_detection,
     list_detections,
     list_stays,
@@ -100,6 +101,18 @@ async def auto_reconcile_exact(
 ):
     try:
         return reconcile_exact(date=date, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/api/sightings/consolidate-fuzzy")
+async def consolidate_fuzzy_sightings_endpoint(
+    date: str,
+    limit: int = Query(500, ge=1, le=500),
+    _: dict = Depends(require_admin),
+):
+    try:
+        return consolidate_fuzzy(date=date, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

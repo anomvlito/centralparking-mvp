@@ -179,3 +179,82 @@ class VehicleFilterSettings:
 
 
 VEHICLE_FILTER_SETTINGS = VehicleFilterSettings.from_env()
+
+
+@dataclass(frozen=True)
+class SightingConsolidationSettings:
+    """Consolidación difusa de avistamientos (ver ADR-005).
+
+    Mismo patrón de rollout seguro que ``DirectionSettings``/
+    ``VehicleFilterSettings``: apagado por defecto y, al habilitarse, en modo
+    sombra (audita qué agruparía, no marca nada como DISMISSED) hasta una
+    activación deliberada posterior. Nunca borra imágenes ni sobrescribe la
+    patente original — solo agrega interpretación (match_status), igual que
+    ``dismiss_detection_event`` y el resto de la conciliación existente.
+
+    Opera sobre las lecturas crudas de ``staging_detections`` (no sobre el
+    ``combined_score`` ya promovido a ``detection_log``): con datos reales
+    (2026-08-10, PCYD65 leído mal 7 veces) el ``combined_score`` de una
+    lectura incorrecta (PCYD55) superó al de la correcta (PCYD65) por 0.0002
+    — ruido, no señal. ``min_confidence`` filtra por la confianza cruda del
+    OCR antes de votar, y la patente ganadora de un grupo es la que más
+    veces se repite igual entre las lecturas que pasan el filtro (desempate
+    por confianza promedio) — no la de mayor confianza individual.
+    """
+
+    enabled: bool = False
+    shadow_mode: bool = True
+    max_distance: int = 1
+    window_seconds: int = 90
+    min_confidence: float = 0.90
+
+    def __post_init__(self) -> None:
+        if self.max_distance not in {0, 1, 2}:
+            raise ValueError("SIGHTING_CONSOLIDATION_MAX_DISTANCE debe estar entre 0 y 2")
+        if not 0 < self.window_seconds <= 600:
+            raise ValueError(
+                "SIGHTING_CONSOLIDATION_WINDOW_SECONDS debe estar en el rango (0, 600]"
+            )
+        if not 0 < self.min_confidence < 1:
+            raise ValueError(
+                "SIGHTING_CONSOLIDATION_MIN_CONFIDENCE debe estar en el rango (0, 1)"
+            )
+        if not self.enabled and not self.shadow_mode:
+            raise ValueError(
+                "SIGHTING_CONSOLIDATION_SHADOW_MODE debe ser true cuando "
+                "SIGHTING_CONSOLIDATION_ENABLED es false"
+            )
+
+    @classmethod
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None
+    ) -> "SightingConsolidationSettings":
+        env = os.environ if environ is None else environ
+        enabled = _as_bool(
+            env.get("SIGHTING_CONSOLIDATION_ENABLED", "false"),
+            "SIGHTING_CONSOLIDATION_ENABLED",
+        )
+        if not enabled:
+            return cls()
+        shadow_mode = _as_bool(
+            env.get("SIGHTING_CONSOLIDATION_SHADOW_MODE", "true"),
+            "SIGHTING_CONSOLIDATION_SHADOW_MODE",
+        )
+        return cls(
+            enabled=enabled,
+            shadow_mode=shadow_mode,
+            max_distance=int(env.get("SIGHTING_CONSOLIDATION_MAX_DISTANCE", "1")),
+            min_confidence=float(
+                env.get("SIGHTING_CONSOLIDATION_MIN_CONFIDENCE", "0.90")
+            ),
+            window_seconds=int(env.get("SIGHTING_CONSOLIDATION_WINDOW_SECONDS", "90")),
+        )
+
+    @property
+    def mode(self) -> str:
+        if not self.enabled:
+            return "disabled"
+        return "shadow" if self.shadow_mode else "active"
+
+
+SIGHTING_CONSOLIDATION_SETTINGS = SightingConsolidationSettings.from_env()
