@@ -208,11 +208,17 @@ class SightingConsolidationSettings:
     cada lectura recién marcada ``DISMISSED`` se mueve —nunca se borra— de
     ``/ftp/historico/{fecha}`` a ``/ftp/descartadas/{fecha}``. Apagado por
     defecto incluso con la consolidación ya activa en producción.
+
+    ``max_distance`` por defecto es 2 desde ADR-008 (antes 1, ver ADR-005):
+    con datos reales de un día completo de producción, ampliarlo a 2
+    resolvió 15 casos adicionales el 2026-08-11 sin ninguna señal del
+    riesgo que ADR-005 consideraba (fusión de dos autos reales ya
+    identificados por separado con confianza independiente).
     """
 
     enabled: bool = False
     shadow_mode: bool = True
-    max_distance: int = 1
+    max_distance: int = 2
     window_seconds: int = 90
     min_confidence: float = 0.90
     archive_discarded_images: bool = False
@@ -252,7 +258,7 @@ class SightingConsolidationSettings:
         return cls(
             enabled=enabled,
             shadow_mode=shadow_mode,
-            max_distance=int(env.get("SIGHTING_CONSOLIDATION_MAX_DISTANCE", "1")),
+            max_distance=int(env.get("SIGHTING_CONSOLIDATION_MAX_DISTANCE", "2")),
             min_confidence=float(
                 env.get("SIGHTING_CONSOLIDATION_MIN_CONFIDENCE", "0.90")
             ),
