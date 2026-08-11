@@ -24,9 +24,19 @@ class SightingConsolidationSettingsTests(unittest.TestCase):
         self.assertFalse(settings.enabled)
         self.assertTrue(settings.shadow_mode)
         self.assertEqual(settings.mode, "disabled")
-        self.assertEqual(settings.min_confidence, 0.90)
+        self.assertEqual(settings.min_confidence, 0.70)  # ver ADR-009
         self.assertFalse(settings.archive_discarded_images)
         self.assertEqual(settings.max_distance, 2)  # ver ADR-008
+
+    def test_min_confidence_env_override_still_works(self):
+        """Confirma que min_confidence sigue siendo configurable — se puede
+        volver a 0.90 vía env var sin tocar código, si hiciera falta."""
+        settings = SightingConsolidationSettings.from_env({
+            "SIGHTING_CONSOLIDATION_ENABLED": "true",
+            "SIGHTING_CONSOLIDATION_SHADOW_MODE": "false",
+            "SIGHTING_CONSOLIDATION_MIN_CONFIDENCE": "0.90",
+        })
+        self.assertEqual(settings.min_confidence, 0.90)
 
     def test_max_distance_env_override_still_works(self):
         """Confirma que max_distance sigue siendo configurable — se puede
