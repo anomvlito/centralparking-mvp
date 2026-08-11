@@ -222,6 +222,15 @@ sobre vehículos reales confirmado y aceptado explícitamente por el
 administrador como parte de una prueba en curso, no como una decisión
 final validada con datos suficientes.
 
+## Fix 2026-08-11: umbral 0.20 → 0.18
+
+Con más tiempo corriendo en modo activo (`shadow_mode=false`) en
+producción, se bajó `conf_threshold` de 0.20 a 0.18 a pedido del
+administrador, para reducir el margen de falsos negativos (vehículos
+reales cerca del umbral que el filtro podía seguir descartando). Cambio de
+configuración puntual, sin nuevo backtest formal — mismo criterio de
+ajuste incremental ya usado en el fix del 2026-08-06 (0.35 → 0.20).
+
 ## Referencias
 
 - `api/vehicle_detector.py` — wrapper ONNX del filtro.
