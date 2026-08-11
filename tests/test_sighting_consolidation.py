@@ -26,6 +26,17 @@ class SightingConsolidationSettingsTests(unittest.TestCase):
         self.assertEqual(settings.mode, "disabled")
         self.assertEqual(settings.min_confidence, 0.90)
         self.assertFalse(settings.archive_discarded_images)
+        self.assertEqual(settings.max_distance, 2)  # ver ADR-008
+
+    def test_max_distance_env_override_still_works(self):
+        """Confirma que max_distance sigue siendo configurable — se puede
+        volver a 1 vía env var sin tocar código, si hiciera falta."""
+        settings = SightingConsolidationSettings.from_env({
+            "SIGHTING_CONSOLIDATION_ENABLED": "true",
+            "SIGHTING_CONSOLIDATION_SHADOW_MODE": "false",
+            "SIGHTING_CONSOLIDATION_MAX_DISTANCE": "1",
+        })
+        self.assertEqual(settings.max_distance, 1)
 
     def test_archive_discarded_images_defaults_off_even_when_active(self):
         settings = SightingConsolidationSettings.from_env({

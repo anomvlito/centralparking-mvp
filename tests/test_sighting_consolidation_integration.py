@@ -424,6 +424,58 @@ class SightingConsolidationIntegrationTests(unittest.TestCase):
         self.assertEqual(self._match_status(first_id)["match_status"], "UNMATCHED")
         self.assertEqual(self._match_status(second_id)["match_status"], "UNMATCHED")
 
+    def test_default_max_distance_now_merges_real_case_at_distance_two(self):
+        """Ver ADR-008. Caso real 2026-08-11: HPVF43 (correcta, 2 lecturas)
+        vs HPVF2 (1 lectura, distancia real 2) — antes quedaban sueltas con
+        max_distance=1. No se pasa max_distance explícito: se prueba
+        justamente el nuevo default (2)."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings, _levenshtein
+
+        self.assertEqual(_levenshtein("HPVF43", "HPVF2"), 2)
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self._insert_staging("HPVF43", 0.9998, now)
+        self._insert_staging("HPVF2", 0.9636, now + datetime.timedelta(seconds=5))
+        self._insert_staging("HPVF43", 0.9964, now + datetime.timedelta(seconds=11))
+
+        winner_id = self._insert_promoted_detection("HPVF43", now, 0.9998)
+        loser_id = self._insert_promoted_detection(
+            "HPVF2", now + datetime.timedelta(seconds=5), 0.9636
+        )
+
+        settings = SightingConsolidationSettings(enabled=True, shadow_mode=False)
+        self.assertEqual(settings.max_distance, 2)
+        with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings):
+            consolidate_fuzzy_sightings(self._today_cl())
+
+        self.assertEqual(self._match_status(winner_id)["match_status"], "UNMATCHED")
+        self.assertEqual(self._match_status(loser_id)["match_status"], "DISMISSED")
+
+    def test_max_distance_2_still_keeps_distance_three_apart(self):
+        """No-regresión: con el nuevo default (2), dos patentes a distancia
+        3 (TSX999 vs TSX111) siguen sin fusionarse — el umbral sigue
+        aplicando, solo se movió de 1 a 2."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings, _levenshtein
+
+        self.assertEqual(_levenshtein("TSX999", "TSX111"), 3)
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self._insert_staging("TSX999", 0.95, now)
+        first_id = self._insert_promoted_detection("TSX999", now, 0.95)
+        second_at = now + datetime.timedelta(seconds=5)
+        self._insert_staging("TSX111", 0.95, second_at)
+        second_id = self._insert_promoted_detection("TSX111", second_at, 0.95)
+
+        settings = SightingConsolidationSettings(enabled=True, shadow_mode=False)
+        self.assertEqual(settings.max_distance, 2)
+        with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings):
+            consolidate_fuzzy_sightings(self._today_cl())
+
+        self.assertEqual(self._match_status(first_id)["match_status"], "UNMATCHED")
+        self.assertEqual(self._match_status(second_id)["match_status"], "UNMATCHED")
+
 
 if __name__ == "__main__":
     unittest.main()
