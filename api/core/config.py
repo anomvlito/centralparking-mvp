@@ -202,6 +202,12 @@ class SightingConsolidationSettings:
     OCR antes de votar, y la patente ganadora de un grupo es la que más
     veces se repite igual entre las lecturas que pasan el filtro (desempate
     por confianza promedio) — no la de mayor confianza individual.
+
+    ``archive_discarded_images`` (ver ADR-006) es un flag aparte, solo
+    relevante cuando ``shadow_mode=False``: si está activo, la imagen de
+    cada lectura recién marcada ``DISMISSED`` se mueve —nunca se borra— de
+    ``/ftp/historico/{fecha}`` a ``/ftp/descartadas/{fecha}``. Apagado por
+    defecto incluso con la consolidación ya activa en producción.
     """
 
     enabled: bool = False
@@ -209,6 +215,7 @@ class SightingConsolidationSettings:
     max_distance: int = 1
     window_seconds: int = 90
     min_confidence: float = 0.90
+    archive_discarded_images: bool = False
 
     def __post_init__(self) -> None:
         if self.max_distance not in {0, 1, 2}:
@@ -250,6 +257,10 @@ class SightingConsolidationSettings:
                 env.get("SIGHTING_CONSOLIDATION_MIN_CONFIDENCE", "0.90")
             ),
             window_seconds=int(env.get("SIGHTING_CONSOLIDATION_WINDOW_SECONDS", "90")),
+            archive_discarded_images=_as_bool(
+                env.get("SIGHTING_CONSOLIDATION_ARCHIVE_ENABLED", "false"),
+                "SIGHTING_CONSOLIDATION_ARCHIVE_ENABLED",
+            ),
         )
 
     @property

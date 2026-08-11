@@ -1,8 +1,11 @@
 import datetime
+import os
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from api.core.config import SightingConsolidationSettings
-from api.database import _cluster_staging_reads, _majority_plate
+from api.database import _archive_discarded_image, _cluster_staging_reads, _majority_plate
 
 _T0 = datetime.datetime(2026, 8, 10, 11, 16, 25, tzinfo=datetime.timezone.utc)
 
@@ -22,6 +25,22 @@ class SightingConsolidationSettingsTests(unittest.TestCase):
         self.assertTrue(settings.shadow_mode)
         self.assertEqual(settings.mode, "disabled")
         self.assertEqual(settings.min_confidence, 0.90)
+        self.assertFalse(settings.archive_discarded_images)
+
+    def test_archive_discarded_images_defaults_off_even_when_active(self):
+        settings = SightingConsolidationSettings.from_env({
+            "SIGHTING_CONSOLIDATION_ENABLED": "true",
+            "SIGHTING_CONSOLIDATION_SHADOW_MODE": "false",
+        })
+        self.assertFalse(settings.archive_discarded_images)
+
+    def test_archive_discarded_images_reads_env_flag(self):
+        settings = SightingConsolidationSettings.from_env({
+            "SIGHTING_CONSOLIDATION_ENABLED": "true",
+            "SIGHTING_CONSOLIDATION_SHADOW_MODE": "false",
+            "SIGHTING_CONSOLIDATION_ARCHIVE_ENABLED": "true",
+        })
+        self.assertTrue(settings.archive_discarded_images)
 
     def test_invalid_shadow_mode_configuration_fails_clearly(self):
         with self.assertRaisesRegex(ValueError, "SHADOW_MODE"):
@@ -105,6 +124,64 @@ class ClusterStagingReadsTests(unittest.TestCase):
         reads = [_read("PCYD65", 0.99, 0), _read("PCY8655", 0.90, 44)]
         clusters = _cluster_staging_reads(reads, window_seconds=90, max_distance=1)
         self.assertEqual(clusters, [])
+
+
+class ArchiveDiscardedImageTests(unittest.TestCase):
+    """Aislado con directorios temporales (FTP_ROOT/FTP_DISCARDED_DIR
+    monkeypatcheados) — nunca toca /ftp real. Ver ADR-006."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.ftp_root = os.path.join(self._tmp.name, "ftp")
+        self.discarded_dir = os.path.join(self._tmp.name, "ftp", "descartadas")
+        os.makedirs(os.path.join(self.ftp_root, "historico", "2026-08-10"))
+        self._patchers = [
+            patch("api.database.FTP_ROOT", self.ftp_root),
+            patch("api.database.FTP_DISCARDED_DIR", self.discarded_dir),
+        ]
+        for p in self._patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patchers:
+            p.stop()
+        self._tmp.cleanup()
+
+    def _write_source(self, filename="10-15-30_PCYD65_2026-08-10.jpg"):
+        path = os.path.join(self.ftp_root, "historico", "2026-08-10", filename)
+        with open(path, "wb") as f:
+            f.write(b"fake-jpg-bytes")
+        return path, f"historico/2026-08-10/{filename}"
+
+    def test_moves_file_and_returns_new_relative_path(self):
+        src_path, image_path = self._write_source()
+        result = _archive_discarded_image(image_path)
+        self.assertEqual(result, "descartadas/2026-08-10/10-15-30_PCYD65_2026-08-10.jpg")
+        self.assertFalse(os.path.exists(src_path))
+        self.assertTrue(os.path.isfile(
+            os.path.join(self.discarded_dir, "2026-08-10", "10-15-30_PCYD65_2026-08-10.jpg")
+        ))
+
+    def test_none_image_path_is_a_noop(self):
+        self.assertIsNone(_archive_discarded_image(None))
+
+    def test_missing_file_returns_none_without_creating_dirs(self):
+        result = _archive_discarded_image("historico/2026-08-10/no-existe.jpg")
+        self.assertIsNone(result)
+        self.assertFalse(os.path.isdir(self.discarded_dir))
+
+    def test_unexpected_path_shape_is_left_untouched(self):
+        # Ya archivada por una corrida anterior, o cualquier forma que no
+        # sea "historico/{fecha}/{archivo}".
+        src_path, _ = self._write_source()
+        already_archived = "descartadas/2026-08-10/10-15-30_PCYD65_2026-08-10.jpg"
+        result = _archive_discarded_image(already_archived)
+        self.assertIsNone(result)
+        self.assertTrue(os.path.isfile(src_path))
+
+    def test_path_traversal_is_rejected(self):
+        result = _archive_discarded_image("../../../../etc/passwd")
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

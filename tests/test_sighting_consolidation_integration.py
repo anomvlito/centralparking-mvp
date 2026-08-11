@@ -1,5 +1,6 @@
 import datetime
 import os
+import tempfile
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -83,16 +84,17 @@ class SightingConsolidationIntegrationTests(unittest.TestCase):
                 detected_at + datetime.timedelta(minutes=2),
             ))
 
-    def _insert_promoted_detection(self, plate, logged_at, confidence):
+    def _insert_promoted_detection(self, plate, logged_at, confidence,
+                                    image_path='historico/test.jpg'):
         with self._real_conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO detection_log
                     (plate, normalized_plate, action, status, confidence,
                      direction, match_status, source, logged_at, image_path)
                 VALUES (%s,%s,'DETECTED','STAGING_AUTO',%s,'UNKNOWN',
-                        'UNMATCHED','TEST',%s,'historico/test.jpg')
+                        'UNMATCHED','TEST',%s,%s)
                 RETURNING id
-            """, (plate, plate, confidence, logged_at))
+            """, (plate, plate, confidence, logged_at, image_path))
             return int(cur.fetchone()["id"])
 
     def _match_status(self, detection_id):
@@ -188,6 +190,78 @@ class SightingConsolidationIntegrationTests(unittest.TestCase):
         # Evidencia (patente leída, imagen) nunca se sobrescribe ni se borra.
         self.assertEqual(loser_row["plate"], "TSX128")
         self.assertIsNotNone(loser_row["image_path"])
+
+    def test_active_mode_leaves_image_path_untouched_by_default(self):
+        """archive_discarded_images default (False) — regresión explícita
+        del comportamiento ya activo en producción: DISMISSED sin tocar
+        image_path, ver ADR-005."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        _winner_id, loser_id = self._seed_winner_and_loser(now)
+
+        settings = SightingConsolidationSettings(
+            enabled=True, shadow_mode=False, max_distance=1,
+            window_seconds=90, min_confidence=0.90,
+        )
+        self.assertFalse(settings.archive_discarded_images)
+        with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings):
+            consolidate_fuzzy_sightings(self._today_cl())
+
+        loser_row = self._match_status(loser_id)
+        self.assertEqual(loser_row["match_status"], "DISMISSED")
+        self.assertEqual(loser_row["image_path"], "historico/test.jpg")
+
+    def test_active_mode_archives_discarded_image_when_enabled(self):
+        """Ver ADR-006: con archive_discarded_images=True, la imagen de la
+        lectura perdedora se mueve —nunca se borra— a /ftp/descartadas/ y
+        image_path queda actualizado a la nueva ubicación."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ftp_root = os.path.join(tmp, "ftp")
+            discarded_dir = os.path.join(ftp_root, "descartadas")
+            day_dir = os.path.join(ftp_root, "historico", self._today_cl())
+            os.makedirs(day_dir)
+            filename = "10-15-30_TSX128_test.jpg"
+            src_path = os.path.join(day_dir, filename)
+            with open(src_path, "wb") as f:
+                f.write(b"fake-jpg-bytes")
+            loser_image_path = f"historico/{self._today_cl()}/{filename}"
+
+            now = datetime.datetime.now(datetime.timezone.utc)
+            self._insert_staging("TSX123", 0.9989, now)
+            self._insert_staging("TSX123", 0.9868, now + datetime.timedelta(seconds=20))
+            self._insert_staging("TSX123", 0.9999, now + datetime.timedelta(seconds=30))
+            self._insert_staging("TSX128", 0.9991, now + datetime.timedelta(seconds=15))
+            winner_id = self._insert_promoted_detection("TSX123", now, 0.9989)
+            loser_id = self._insert_promoted_detection(
+                "TSX128", now + datetime.timedelta(seconds=15), 0.9991,
+                image_path=loser_image_path,
+            )
+
+            settings = SightingConsolidationSettings(
+                enabled=True, shadow_mode=False, max_distance=1,
+                window_seconds=90, min_confidence=0.90,
+                archive_discarded_images=True,
+            )
+            with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings), \
+                 patch("api.database.FTP_ROOT", ftp_root), \
+                 patch("api.database.FTP_DISCARDED_DIR", discarded_dir):
+                consolidate_fuzzy_sightings(self._today_cl())
+
+            winner_row = self._match_status(winner_id)
+            loser_row = self._match_status(loser_id)
+            self.assertEqual(winner_row["match_status"], "UNMATCHED")
+            self.assertEqual(loser_row["match_status"], "DISMISSED")
+            expected_new_path = f"descartadas/{self._today_cl()}/{filename}"
+            self.assertEqual(loser_row["image_path"], expected_new_path)
+            self.assertFalse(os.path.exists(src_path))
+            self.assertTrue(os.path.isfile(
+                os.path.join(discarded_dir, self._today_cl(), filename)
+            ))
 
     def test_low_confidence_neighbor_is_never_touched_even_if_close(self):
         from api.core.config import SightingConsolidationSettings
