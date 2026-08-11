@@ -85,16 +85,17 @@ class SightingConsolidationIntegrationTests(unittest.TestCase):
             ))
 
     def _insert_promoted_detection(self, plate, logged_at, confidence,
-                                    image_path='historico/test.jpg'):
+                                    image_path='historico/test.jpg',
+                                    match_status='UNMATCHED'):
         with self._real_conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO detection_log
                     (plate, normalized_plate, action, status, confidence,
                      direction, match_status, source, logged_at, image_path)
                 VALUES (%s,%s,'DETECTED','STAGING_AUTO',%s,'UNKNOWN',
-                        'UNMATCHED','TEST',%s,%s)
+                        %s,'TEST',%s,%s)
                 RETURNING id
-            """, (plate, plate, confidence, logged_at, image_path))
+            """, (plate, plate, confidence, match_status, logged_at, image_path))
             return int(cur.fetchone()["id"])
 
     def _match_status(self, detection_id):
@@ -255,6 +256,121 @@ class SightingConsolidationIntegrationTests(unittest.TestCase):
             winner_row = self._match_status(winner_id)
             loser_row = self._match_status(loser_id)
             self.assertEqual(winner_row["match_status"], "UNMATCHED")
+            self.assertEqual(loser_row["match_status"], "DISMISSED")
+            expected_new_path = f"descartadas/{self._today_cl()}/{filename}"
+            self.assertEqual(loser_row["image_path"], expected_new_path)
+            self.assertFalse(os.path.exists(src_path))
+            self.assertTrue(os.path.isfile(
+                os.path.join(discarded_dir, self._today_cl(), filename)
+            ))
+
+    def test_invalid_format_loser_gets_dismissed_real_case_2026_08_11(self):
+        """Reproduce el caso real (ver ADR-007): CTJB56 leída 4 veces,
+        CIJB56 y TJB56 (5 caracteres, INVALID_FORMAT) una vez cada una, en
+        la misma ráfaga. CTJB56 debe ganar y quedar UNMATCHED; CIJB56 y
+        TJB56 deben quedar DISMISSED — antes de este fix, TJB56 nunca
+        pasaba de INVALID_FORMAT."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self._insert_staging("CTJB56", 0.9562, now)
+        self._insert_staging("CTJB56", 0.9990, now + datetime.timedelta(seconds=6))
+        self._insert_staging("CIJB56", 0.9399, now + datetime.timedelta(seconds=11))
+        self._insert_staging("CTJB56", 0.9995, now + datetime.timedelta(seconds=16))
+        self._insert_staging("TJB56", 0.9965, now + datetime.timedelta(seconds=21))
+        self._insert_staging("CTJB56", 0.9930, now + datetime.timedelta(seconds=26))
+
+        winner_id = self._insert_promoted_detection("CTJB56", now, 0.9995)
+        cijb56_id = self._insert_promoted_detection(
+            "CIJB56", now + datetime.timedelta(seconds=11), 0.9399
+        )
+        tjb56_id = self._insert_promoted_detection(
+            "TJB56", now + datetime.timedelta(seconds=21), 0.9965,
+            match_status='INVALID_FORMAT',
+        )
+
+        settings = SightingConsolidationSettings(
+            enabled=True, shadow_mode=False, max_distance=1,
+            window_seconds=90, min_confidence=0.90,
+        )
+        with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings):
+            consolidate_fuzzy_sightings(self._today_cl())
+
+        self.assertEqual(self._match_status(winner_id)["match_status"], "UNMATCHED")
+        self.assertEqual(self._match_status(cijb56_id)["match_status"], "DISMISSED")
+        tjb56_row = self._match_status(tjb56_id)
+        self.assertEqual(tjb56_row["match_status"], "DISMISSED")
+        self.assertEqual(tjb56_row["plate"], "TJB56")  # evidencia intacta
+
+    def test_low_confidence_invalid_format_is_never_touched(self):
+        """CSB77 (5 caracteres, confianza cruda 0.6968 — caso real): queda
+        por debajo de min_confidence=0.90, se filtra antes de agrupar,
+        igual que cualquier lectura de baja confianza — sin regresión."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self._insert_staging("TSBZ38", 0.95, now)
+        self._insert_staging("TSBZ38", 0.96, now + datetime.timedelta(seconds=5))
+        self._insert_staging("CSB77", 0.6968, now + datetime.timedelta(seconds=10))
+
+        winner_id = self._insert_promoted_detection("TSBZ38", now, 0.95)
+        stray_id = self._insert_promoted_detection(
+            "CSB77", now + datetime.timedelta(seconds=10), 0.6968,
+            match_status='INVALID_FORMAT',
+        )
+
+        settings = SightingConsolidationSettings(
+            enabled=True, shadow_mode=False, max_distance=1,
+            window_seconds=90, min_confidence=0.90,
+        )
+        with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings):
+            consolidate_fuzzy_sightings(self._today_cl())
+
+        self.assertEqual(self._match_status(winner_id)["match_status"], "UNMATCHED")
+        self.assertEqual(self._match_status(stray_id)["match_status"], "INVALID_FORMAT")
+
+    def test_invalid_format_loser_archived_when_enabled(self):
+        """Con archive_discarded_images=True (ADR-006, ya activo en
+        producción), la imagen de un perdedor INVALID_FORMAT se archiva
+        igual que cualquier otro perdedor — sin tocar código de ADR-006."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ftp_root = os.path.join(tmp, "ftp")
+            discarded_dir = os.path.join(ftp_root, "descartadas")
+            day_dir = os.path.join(ftp_root, "historico", self._today_cl())
+            os.makedirs(day_dir)
+            filename = "08-21-22_TJB56_test.jpg"
+            src_path = os.path.join(day_dir, filename)
+            with open(src_path, "wb") as f:
+                f.write(b"fake-jpg-bytes")
+            loser_image_path = f"historico/{self._today_cl()}/{filename}"
+
+            now = datetime.datetime.now(datetime.timezone.utc)
+            self._insert_staging("CTJB56", 0.99, now)
+            self._insert_staging("CTJB56", 0.99, now + datetime.timedelta(seconds=5))
+            self._insert_staging("TJB56", 0.99, now + datetime.timedelta(seconds=10))
+            winner_id = self._insert_promoted_detection("CTJB56", now, 0.99)
+            loser_id = self._insert_promoted_detection(
+                "TJB56", now + datetime.timedelta(seconds=10), 0.99,
+                image_path=loser_image_path, match_status='INVALID_FORMAT',
+            )
+
+            settings = SightingConsolidationSettings(
+                enabled=True, shadow_mode=False, max_distance=1,
+                window_seconds=90, min_confidence=0.90,
+                archive_discarded_images=True,
+            )
+            with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings), \
+                 patch("api.database.FTP_ROOT", ftp_root), \
+                 patch("api.database.FTP_DISCARDED_DIR", discarded_dir):
+                consolidate_fuzzy_sightings(self._today_cl())
+
+            self.assertEqual(self._match_status(winner_id)["match_status"], "UNMATCHED")
+            loser_row = self._match_status(loser_id)
             self.assertEqual(loser_row["match_status"], "DISMISSED")
             expected_new_path = f"descartadas/{self._today_cl()}/{filename}"
             self.assertEqual(loser_row["image_path"], expected_new_path)
