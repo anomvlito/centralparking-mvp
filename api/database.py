@@ -724,14 +724,16 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
 def get_stay_proposals(
     date: str, limit: int = 200, include_duplicate_duration: bool = False
 ) -> list[dict]:
-    day_start, _ = _operational_day_bounds(date)
-    previous_date = (day_start.date() - datetime.timedelta(days=1)).isoformat()
+    # 2026-08-11: antes también traía las detecciones UNMATCHED del día
+    # anterior, para poder proponer estadías que cruzan la medianoche. Eso
+    # fue justo lo que generó los casos reales de RPCG72/SYHS56 y
+    # KFCR16/AFCR16/MERR16 ese mismo día — proposals armadas con lecturas
+    # de un día distinto al que se está mirando, muy difíciles de
+    # entender/revisar desde el dashboard. Ahora las proposals quedan
+    # acotadas al propio día: una detección de ayer que sigue sin resolver
+    # aparece al mirar el día de ayer, no mezclada en el día de hoy.
     events = get_detection_events(limit=500, match_status="UNMATCHED", date=date)
-    events += get_detection_events(
-        limit=500, match_status="UNMATCHED", date=previous_date
-    )
-    unique = {event["detection_id"]: event for event in events}
-    proposals = build_stay_proposals(list(unique.values()))
+    proposals = build_stay_proposals(events)
     if not include_duplicate_duration:
         proposals = [
             item for item in proposals if item["duration_minutes"] > 1
