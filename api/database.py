@@ -818,9 +818,19 @@ def _majority_plate(cluster: list[dict]) -> str:
     las lecturas crudas (no la de mayor confianza individual — ver ADR-005,
     caso real donde una lectura incorrecta ganó por 0.0002 de diferencia).
     Empate en cantidad se desempata por confianza promedio.
+
+    Si el grupo tiene algún candidato de 6 caracteres (único formato válido
+    de patente chilena), la ganadora sale solo de ese subconjunto —
+    independientemente de cuántas veces se repitió uno de longitud
+    inválida (ver ADR-007, caso real: `TJB56` con más repeticiones que
+    `CTJB56` en la misma ráfaga). Solo si ningún candidato tiene 6
+    caracteres se vota entre todos.
     """
+    valid_format = [r for r in cluster if len(r["plate"]) == 6]
+    pool = valid_format if valid_format else cluster
+
     counts: dict[str, int] = {}
-    for read in cluster:
+    for read in pool:
         counts[read["plate"]] = counts.get(read["plate"], 0) + 1
     top_count = max(counts.values())
     tied = [plate for plate, count in counts.items() if count == top_count]
@@ -828,7 +838,7 @@ def _majority_plate(cluster: list[dict]) -> str:
         return tied[0]
 
     def avg_confidence(plate: str) -> float:
-        values = [r["confidence"] for r in cluster if r["plate"] == plate]
+        values = [r["confidence"] for r in pool if r["plate"] == plate]
         return sum(values) / len(values)
 
     return max(tied, key=avg_confidence)
@@ -843,11 +853,17 @@ def _cluster_staging_reads(
     mayoritaria del grupo hasta el momento — ver ADR-005. Solo devuelve
     grupos con más de una patente *distinta*; varias lecturas repitiendo la
     misma patente no son una ambigüedad a resolver (staging ya las dedupe).
+
+    No filtra por longitud exacta (ver ADR-007): una lectura de longitud
+    inválida (carácter de más o de menos) puede unirse a un grupo si su
+    distancia de edición a la representante cae dentro de ``max_distance``
+    — la distancia de edición ya maneja inserciones/borrados de forma
+    nativa, así que el mismo umbral que protege contra fusionar autos
+    distintos sigue aplicando exactamente igual. ``_majority_plate`` nunca
+    deja ganar a una de longitud inválida si hay una de 6 caracteres en el
+    grupo.
     """
-    valid = sorted(
-        [r for r in reads if len(r["plate"]) == 6],
-        key=lambda r: r["detected_at"],
-    )
+    valid = sorted(reads, key=lambda r: r["detected_at"])
     clusters: list[list[dict]] = []
     for read in valid:
         placed = False
@@ -938,10 +954,13 @@ def consolidate_fuzzy_sightings(date: str, limit: int = 2000) -> dict:
     votar; la patente ganadora es la mayoritaria entre las lecturas que
     pasan el filtro (ver ``_majority_plate``), no la de mayor confianza
     individual. Los avistamientos promovidos (``detection_log``) de las
-    patentes perdedoras del grupo pasan a DISMISSED; el resto nunca se toca.
-    Nunca borra imágenes ni sobrescribe la lectura original de ninguna
-    detección (mismo contrato que el resto de la conciliación: "evidencia y
-    OCR original son inmutables").
+    patentes perdedoras del grupo pasan a DISMISSED (desde UNMATCHED o
+    desde INVALID_FORMAT — ver ADR-007: una lectura de longitud distinta a
+    6 caracteres compite igual, pero nunca gana si el grupo tiene algún
+    candidato de 6); el resto nunca se toca. Nunca borra imágenes ni
+    sobrescribe la lectura original de ninguna detección (mismo contrato
+    que el resto de la conciliación: "evidencia y OCR original son
+    inmutables").
     """
     settings = SIGHTING_CONSOLIDATION_SETTINGS
     reads = _get_staging_reads_for_date(date, limit=limit)
@@ -968,7 +987,7 @@ def consolidate_fuzzy_sightings(date: str, limit: int = 2000) -> dict:
                 cur.execute("""
                     SELECT id, plate FROM detection_log
                     WHERE normalized_plate = ANY(%s)
-                      AND match_status = 'UNMATCHED'
+                      AND match_status IN ('UNMATCHED', 'INVALID_FORMAT')
                       AND logged_at = ANY(%s)
                 """, (loser_plates, loser_timestamps))
                 loser_rows = cur.fetchall()
@@ -996,7 +1015,7 @@ def consolidate_fuzzy_sightings(date: str, limit: int = 2000) -> dict:
                     cur.execute("""
                         UPDATE detection_log
                         SET match_status = 'DISMISSED'
-                        WHERE id = ANY(%s) AND match_status = 'UNMATCHED'
+                        WHERE id = ANY(%s) AND match_status IN ('UNMATCHED', 'INVALID_FORMAT')
                         RETURNING id, image_path
                     """, (loser_ids,))
                     dismissed_rows = cur.fetchall()

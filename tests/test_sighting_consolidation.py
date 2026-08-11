@@ -78,6 +78,29 @@ class MajorityPlateTests(unittest.TestCase):
         ]
         self.assertEqual(_majority_plate(cluster), "AAA111")
 
+    def test_valid_format_wins_even_outvoted_by_malformed_length(self):
+        """Caso real 2026-08-11: TJB56 (5 caracteres, sin la "C" inicial)
+        se repitió más que CTJB56 en la misma ráfaga — ver ADR-007. Un
+        candidato de 6 caracteres nunca puede perder contra uno de longitud
+        inválida, sin importar cuántas veces se repitió."""
+        cluster = [
+            _read("TJB56", 0.99, 0),
+            _read("TJB56", 0.98, 5),
+            _read("TJB56", 0.97, 10),
+            _read("CTJB56", 0.95, 15),
+        ]
+        self.assertEqual(_majority_plate(cluster), "CTJB56")
+
+    def test_falls_back_to_full_vote_when_no_candidate_has_valid_format(self):
+        """Si ningún candidato del grupo tiene 6 caracteres, se vota entre
+        todos — mismo comportamiento que antes de ADR-007."""
+        cluster = [
+            _read("TJB56", 0.99, 0),
+            _read("TJB56", 0.98, 5),
+            _read("CIB56", 0.97, 10),
+        ]
+        self.assertEqual(_majority_plate(cluster), "TJB56")
+
 
 class ClusterStagingReadsTests(unittest.TestCase):
     def test_real_burst_2026_08_10_groups_high_confidence_misreads_under_correct_plate(self):
@@ -120,8 +143,34 @@ class ClusterStagingReadsTests(unittest.TestCase):
         clusters = _cluster_staging_reads(reads, window_seconds=90, max_distance=1)
         self.assertEqual(clusters, [])
 
-    def test_malformed_length_plate_is_excluded_from_clustering(self):
+    def test_length_mismatch_beyond_edit_distance_is_not_merged(self):
+        """PCYD65 vs PCY8655: distancia real 2 (no por longitud — ver
+        ADR-007, la longitud ya no excluye por sí sola; sigue sin agrupar
+        porque supera max_distance=1, el mismo umbral de siempre)."""
         reads = [_read("PCYD65", 0.99, 0), _read("PCY8655", 0.90, 44)]
+        clusters = _cluster_staging_reads(reads, window_seconds=90, max_distance=1)
+        self.assertEqual(clusters, [])
+
+    def test_invalid_length_read_joins_cluster_of_its_valid_sibling(self):
+        """Caso real 2026-08-11: TJB56 (5 caracteres) a distancia 1 de
+        CTJB56 — ver ADR-007. Antes quedaba excluida por longitud sin
+        siquiera comparar distancia; ahora se agrupa y compite (pero nunca
+        gana, ver MajorityPlateTests)."""
+        reads = [
+            _read("CTJB56", 0.99, 0),
+            _read("CTJB56", 0.98, 5),
+            _read("TJB56", 0.97, 10),
+        ]
+        clusters = _cluster_staging_reads(reads, window_seconds=90, max_distance=1)
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual({r["plate"] for r in clusters[0]}, {"CTJB56", "TJB56"})
+        self.assertEqual(_majority_plate(clusters[0]), "CTJB56")
+
+    def test_two_valid_length_plates_at_distance_two_still_not_merged(self):
+        """Causa B (ver ADR-007, explícitamente fuera de alcance): PGSY86
+        vs BGSY06, ambas de 6 caracteres, distancia real 2 — sigue sin
+        agruparse, sin cambios respecto de antes de este fix."""
+        reads = [_read("PGSY86", 0.95, 0), _read("BGSY06", 0.93, 15)]
         clusters = _cluster_staging_reads(reads, window_seconds=90, max_distance=1)
         self.assertEqual(clusters, [])
 
