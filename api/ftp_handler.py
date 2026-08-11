@@ -50,6 +50,9 @@ FTP_ARCHIVE_DIR  = os.environ.get("FTP_ARCHIVE_DIR", "/ftp/historico")
 _MAX_CONCURRENT_VIDEOS = int(os.environ.get("MAX_CONCURRENT_VIDEO_PROCESSING", "1"))
 _video_semaphore = threading.Semaphore(_MAX_CONCURRENT_VIDEOS)
 FTP_REVIEW_DIR   = os.environ.get("FTP_REVIEW_DIR",  "/ftp/revisar")
+# Ver ADR-006 — imágenes de avistamientos descartados por consolidación
+# difusa, movidas (nunca borradas) desde /ftp/historico.
+FTP_DISCARDED_DIR = os.environ.get("FTP_DISCARDED_DIR", "/ftp/descartadas")
 
 
 # ─────────────────────────── Helpers ────────────────────────────────────────
@@ -429,10 +432,11 @@ async def promote_review(
 
 @router.get("/api/monitor/file/{folder}/{date}/{filename}")
 async def serve_ftp_file(folder: str, date: str, filename: str):
-    """Sirve una imagen desde /ftp/historico o /ftp/revisar."""
+    """Sirve una imagen desde /ftp/historico, /ftp/revisar o /ftp/descartadas."""
     base_dirs = {
-        "historico": FTP_ARCHIVE_DIR,
-        "revisar":   FTP_REVIEW_DIR,
+        "historico":   FTP_ARCHIVE_DIR,
+        "revisar":     FTP_REVIEW_DIR,
+        "descartadas": FTP_DISCARDED_DIR,
     }
     if folder not in base_dirs:
         raise HTTPException(400, "Carpeta inválida")

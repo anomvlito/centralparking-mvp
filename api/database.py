@@ -888,6 +888,48 @@ def _get_staging_reads_for_date(date: str, limit: int = 2000) -> list[dict]:
     ]
 
 
+# Ver ADR-006. Ambos overridables por separado de FTP_ARCHIVE_DIR/
+# FTP_REVIEW_DIR (ftp_handler.py, staging.py) para no acoplar este módulo a
+# esos otros dos, y para poder aislar los tests contra directorios
+# temporales sin tocar el /ftp real.
+FTP_ROOT = os.environ.get("FTP_ROOT", "/ftp")
+FTP_DISCARDED_DIR = os.environ.get("FTP_DISCARDED_DIR", "/ftp/descartadas")
+
+
+def _archive_discarded_image(image_path: Optional[str]) -> Optional[str]:
+    """Mueve (nunca borra) la imagen de una lectura recién marcada DISMISSED
+    de /ftp/historico/{fecha}/ a /ftp/descartadas/{fecha}/ — ver ADR-006.
+    Devuelve el nuevo image_path relativo a FTP_ROOT, o None si no se movió
+    nada (la fila conserva su image_path original sin cambios). Nunca lanza
+    excepción: un fallo acá no puede tumbar consolidate_fuzzy_sightings,
+    mismo criterio que el audit_sink de VEHICLE_FILTER_EVAL.
+    """
+    if not image_path:
+        return None
+
+    root_real = os.path.realpath(FTP_ROOT)
+    src = os.path.realpath(os.path.join(FTP_ROOT, image_path))
+    if not src.startswith(root_real + os.sep) or not os.path.isfile(src):
+        return None
+
+    # Forma esperada: "historico/{fecha}/{archivo}" (ver
+    # staging._save_detection_image). Cualquier otra forma —incluida una
+    # ruta ya archivada por una corrida anterior— se deja intacta.
+    parts = image_path.split("/")
+    if len(parts) != 3 or parts[0] != "historico":
+        return None
+    _, date_str, filename = parts
+
+    dest_dir = os.path.join(FTP_DISCARDED_DIR, date_str)
+    dest = os.path.join(dest_dir, filename)
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        os.replace(src, dest)
+    except OSError:
+        return None
+    return f"descartadas/{date_str}/{filename}"
+
+
 def consolidate_fuzzy_sightings(date: str, limit: int = 2000) -> dict:
     """Agrupa lecturas de staging que son casi seguro el mismo vehículo leído
     con OCR inconsistente en una misma ráfaga (ver ADR-005, caso real
@@ -955,8 +997,19 @@ def consolidate_fuzzy_sightings(date: str, limit: int = 2000) -> dict:
                         UPDATE detection_log
                         SET match_status = 'DISMISSED'
                         WHERE id = ANY(%s) AND match_status = 'UNMATCHED'
+                        RETURNING id, image_path
                     """, (loser_ids,))
-                    dismissed += cur.rowcount
+                    dismissed_rows = cur.fetchall()
+                    dismissed += len(dismissed_rows)
+
+                    if settings.archive_discarded_images:
+                        for row in dismissed_rows:
+                            new_path = _archive_discarded_image(row["image_path"])
+                            if new_path:
+                                cur.execute(
+                                    "UPDATE detection_log SET image_path = %s WHERE id = %s",
+                                    (new_path, int(row["id"])),
+                                )
 
     return {
         "date": date,
