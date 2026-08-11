@@ -305,10 +305,10 @@ def extract_best_plate(results, strategy_name: str,
     return None
 
 
-# Una lectura corroborada por una sola estrategia (de 12) es la más fácil de
+# Una lectura corroborada por 1 o 2 estrategias (de 12) es la más fácil de
 # confundir con ruido/objetos fijos del fondo (ver caso real: bloque de
 # hormigón/plástico leído como patente con confianza 0.62-0.69 por una sola
-# estrategia). Lecturas de 2+ estrategias no pasan por este filtro: ya están
+# estrategia). Lecturas de 3+ estrategias no pasan por este filtro: ya están
 # corroboradas independientemente y bajarles el piso de confianza rechazaría
 # patentes reales verificadas (ver LLPD45, VYFJ45 en el archivo histórico).
 #
@@ -318,6 +318,16 @@ def extract_best_plate(results, strategy_name: str,
 # reabrir ese caso puntual. Si en producción reaparecen falsos positivos de
 # fondo en ese rango, subir MIN_SINGLE_VOTE_CONFIDENCE por env var (sin tocar
 # código) es la primera palanca a probar antes de tocar esta lógica.
+#
+# Extendido a 2 estrategias (2026-08-11): caso real KG1155 (votes=2/12,
+# conf_avg=0.56) se guardó igual porque el piso solo miraba 1 voto — el
+# supuesto de "2+ estrategias ya corroboran independientemente" no se
+# sostenía con confianza tan baja. Verificado contra ~2 semanas de logs de
+# producción antes de aplicar: TODAS las detecciones reales de 2 votos
+# (VYFJ45 incluida) tienen conf_avg >= 0.99; las ~90 de confianza < 0.70 son
+# de un solo avistamiento cada una (nunca se repiten) y muchas ni siquiera
+# respetan el formato de patente — ruido, no autos reales. Bajar el piso acá
+# no debería perder ninguna detección real verificada.
 MIN_SINGLE_VOTE_CONFIDENCE = float(os.environ.get("MIN_SINGLE_VOTE_CONFIDENCE", "0.70"))
 
 
@@ -357,10 +367,10 @@ def run_multi_strategy(img: np.ndarray) -> Optional[dict]:
     winner_group = votes[winner_plate]
     best = max(winner_group, key=lambda c: c["confidence"])
 
-    if len(winner_group) == 1 and best["confidence"] < MIN_SINGLE_VOTE_CONFIDENCE:
+    if len(winner_group) <= 2 and best["confidence"] < MIN_SINGLE_VOTE_CONFIDENCE:
         print(
             f"no_detection: {winner_plate} descartado "
-            f"(1 sola estrategia, conf={best['confidence']:.2f} "
+            f"({len(winner_group)} estrategia(s), conf={best['confidence']:.2f} "
             f"< {MIN_SINGLE_VOTE_CONFIDENCE})"
         )
         return None
