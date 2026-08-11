@@ -476,6 +476,55 @@ class SightingConsolidationIntegrationTests(unittest.TestCase):
         self.assertEqual(self._match_status(first_id)["match_status"], "UNMATCHED")
         self.assertEqual(self._match_status(second_id)["match_status"], "UNMATCHED")
 
+    def test_default_min_confidence_now_merges_real_low_confidence_case(self):
+        """Ver ADR-009. Caso real 2026-08-11: RPTD80 (correcta, alta
+        confianza) vs RP7080 (confianza cruda 0.8849 — por debajo del piso
+        anterior de 0.90, por encima del nuevo default 0.70). No se pasa
+        min_confidence explícito: se prueba justamente el nuevo default."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings, _levenshtein
+
+        self.assertEqual(_levenshtein("RPTD80", "RP7080"), 2)
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self._insert_staging("RPTD80", 0.9600, now)
+        self._insert_staging("RP7080", 0.8849, now + datetime.timedelta(seconds=11))
+
+        winner_id = self._insert_promoted_detection("RPTD80", now, 0.9600)
+        loser_id = self._insert_promoted_detection(
+            "RP7080", now + datetime.timedelta(seconds=11), 0.8849
+        )
+
+        settings = SightingConsolidationSettings(enabled=True, shadow_mode=False)
+        self.assertEqual(settings.min_confidence, 0.70)
+        with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings):
+            consolidate_fuzzy_sightings(self._today_cl())
+
+        self.assertEqual(self._match_status(winner_id)["match_status"], "UNMATCHED")
+        self.assertEqual(self._match_status(loser_id)["match_status"], "DISMISSED")
+
+    def test_min_confidence_070_still_filters_reads_below_070(self):
+        """No-regresión: con el nuevo default (0.70), una lectura de
+        confianza cruda 0.65 sigue sin tocarse — el piso sigue aplicando,
+        solo se movió de 0.90 a 0.70."""
+        from api.core.config import SightingConsolidationSettings
+        from api.database import consolidate_fuzzy_sightings
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self._insert_staging("TSX456", 0.95, now)
+        winner_id = self._insert_promoted_detection("TSX456", now, 0.95)
+        stray_at = now + datetime.timedelta(seconds=10)
+        self._insert_staging("TSX457", 0.65, stray_at)
+        stray_id = self._insert_promoted_detection("TSX457", stray_at, 0.65)
+
+        settings = SightingConsolidationSettings(enabled=True, shadow_mode=False)
+        self.assertEqual(settings.min_confidence, 0.70)
+        with patch("api.database.SIGHTING_CONSOLIDATION_SETTINGS", settings):
+            consolidate_fuzzy_sightings(self._today_cl())
+
+        self.assertEqual(self._match_status(winner_id)["match_status"], "UNMATCHED")
+        self.assertEqual(self._match_status(stray_id)["match_status"], "UNMATCHED")
+
 
 if __name__ == "__main__":
     unittest.main()

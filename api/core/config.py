@@ -214,13 +214,20 @@ class SightingConsolidationSettings:
     resolvió 15 casos adicionales el 2026-08-11 sin ninguna señal del
     riesgo que ADR-005 consideraba (fusión de dos autos reales ya
     identificados por separado con confianza independiente).
+
+    ``min_confidence`` por defecto es 0.70 desde ADR-009 (antes 0.90):
+    alinea con ``MIN_SINGLE_VOTE_CONFIDENCE`` (api/detect.py), el piso que
+    ya decide si una lectura se guarda como archivo — no tiene sentido
+    exigirle más a la consolidación que a la captura misma. Verificado con
+    datos reales: bajarlo no cambió ninguna ganadora ya establecida en
+    ningún nivel probado (0.90 a 0.70).
     """
 
     enabled: bool = False
     shadow_mode: bool = True
     max_distance: int = 2
     window_seconds: int = 90
-    min_confidence: float = 0.90
+    min_confidence: float = 0.70
     archive_discarded_images: bool = False
 
     def __post_init__(self) -> None:
@@ -260,7 +267,7 @@ class SightingConsolidationSettings:
             shadow_mode=shadow_mode,
             max_distance=int(env.get("SIGHTING_CONSOLIDATION_MAX_DISTANCE", "2")),
             min_confidence=float(
-                env.get("SIGHTING_CONSOLIDATION_MIN_CONFIDENCE", "0.90")
+                env.get("SIGHTING_CONSOLIDATION_MIN_CONFIDENCE", "0.70")
             ),
             window_seconds=int(env.get("SIGHTING_CONSOLIDATION_WINDOW_SECONDS", "90")),
             archive_discarded_images=_as_bool(
