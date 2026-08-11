@@ -332,6 +332,26 @@ proposals = build_stay_proposals(events)
 
 ---
 
+### ✅ [RESUELTO] Piso de Confianza del ALPR Solo Protegía Lecturas de 1 Estrategia, no de 2
+
+**Problema:** Caso real 2026-08-11: `KG1155` se guardó como avistamiento (imagen + `detection_log`) con solo 56% de confianza promedio, generando ruido en la cola de revisión. El usuario reportó "se guardan más patentes de las necesarias" para varios casos seguidos.
+
+**Ubicación:** `api/detect.py::run_multi_strategy()`
+
+**Causa:** `MIN_SINGLE_VOTE_CONFIDENCE` (0.70) solo se aplicaba cuando **una sola** de las 12 estrategias votaba por una patente (`len(winner_group) == 1`). Si 2 estrategias coincidían de forma independiente en el mismo string, la lectura se aceptaba sin ningún piso de confianza — el supuesto documentado ("2+ estrategias ya corroboran independientemente, bajar el piso rechazaría patentes reales como LLPD45/VYFJ45") no se sostenía cuando esas 2 estrategias coincidían con confianza baja. Log real: `KG1155 votes=2/12 conf_avg=0.56`.
+
+**Solución aplicada:**
+```python
+# detect.py::run_multi_strategy()
+if len(winner_group) <= 2 and best["confidence"] < MIN_SINGLE_VOTE_CONFIDENCE:
+    ...
+    return None
+```
+
+**Por qué funciona:** Antes de aplicar el cambio se revisaron ~2 semanas de logs de producción: todas las detecciones reales de 2 votos (`VYFJ45` incluida) tienen confianza promedio >= 0.99 — el nuevo piso (0.70) no las afecta. Las ~90 detecciones de 2 votos con confianza < 0.70 aparecen **una sola vez cada una** (nunca se repiten, a diferencia de un auto real que vuelve) y varias ni siquiera respetan el formato de patente — ruido, no autos reales. Solo 3+ votos independientes quedan sin piso de confianza.
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
