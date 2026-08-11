@@ -127,16 +127,18 @@ class VehicleFilterSettings:
     apagado por defecto y, al habilitarse, en modo sombra (audita, no
     descarta) hasta una activación deliberada posterior.
 
-    conf_threshold=0.20: calibrado contra 143 imágenes con vehículo
-    confirmado + 535 sin detección del 2026-08-06 (ver ADR-004, "Fix
-    2026-08-06") — a este umbral, con YOLOX-Tiny, los únicos descartes
-    fueron escenas nocturnas confirmadas sin vehículo (falsos positivos del
-    propio detector de patente), no autos reales perdidos.
+    conf_threshold=0.18: bajado desde 0.20 el 2026-08-11 (ver ADR-004, "Fix
+    2026-08-11") — el 0.20 original se calibró contra 143 imágenes con
+    vehículo confirmado + 535 sin detección del 2026-08-06 (con YOLOX-Tiny,
+    los únicos descartes en ese momento fueron escenas nocturnas
+    confirmadas sin vehículo, no autos reales perdidos), pero con más
+    tiempo en producción activa se ajustó un poco más abajo para reducir el
+    margen de falsos negativos.
     """
 
     enabled: bool = False
     shadow_mode: bool = True
-    conf_threshold: float = 0.20
+    conf_threshold: float = 0.18
 
     def __post_init__(self) -> None:
         if not 0 < self.conf_threshold < 1:
@@ -167,7 +169,7 @@ class VehicleFilterSettings:
             enabled=enabled,
             shadow_mode=shadow_mode,
             conf_threshold=float(
-                env.get("VEHICLE_FILTER_CONF_THRESH", "0.20")
+                env.get("VEHICLE_FILTER_CONF_THRESH", "0.18")
             ),
         )
 
