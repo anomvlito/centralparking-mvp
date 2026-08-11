@@ -113,12 +113,27 @@ class ReconciliationServiceTests(unittest.TestCase):
 
     @patch("api.database.get_detection_events")
     def test_one_minute_proposals_are_not_returned_to_dashboard(self, get_events):
-        get_events.side_effect = [[
+        get_events.return_value = [
             self._event(1, "ABC123", "2026-07-28T10:00:00-04:00"),
             self._event(2, "ABC128", "2026-07-28T10:01:59-04:00"),
-        ], []]
+        ]
 
         self.assertEqual(get_stay_proposals("2026-07-28"), [])
+
+    @patch("api.database.get_detection_events")
+    def test_proposals_never_fetch_a_different_day(self, get_events):
+        """Regresión 2026-08-11: antes también traía las detecciones
+        UNMATCHED del día anterior para poder cruzar la medianoche —
+        justo lo que generó proposals armadas con lecturas de otro día
+        (RPCG72/SYHS56, KFCR16/AFCR16/MERR16). Ahora get_stay_proposals
+        solo pide el día que se está mirando."""
+        get_events.return_value = []
+
+        get_stay_proposals("2026-07-28")
+
+        get_events.assert_called_once_with(
+            limit=500, match_status="UNMATCHED", date="2026-07-28"
+        )
 
     @patch("api.database.get_stay_proposals")
     @patch("api.database.reconcile_detection_events")

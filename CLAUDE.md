@@ -311,6 +311,27 @@ proposals = [
 
 ---
 
+### ✅ [RESUELTO] Propuestas de Conciliación Mezclaban Detecciones de Días Distintos
+
+**Problema:** A pedido del usuario, tras los dos incidentes reales del mismo día (`RPCG72`/`SYHS56`, `KFCR16`/`AFCR16`/`MERR16` — ver entradas anteriores): las propuestas de conciliación (`/api/stay-proposals`) mostradas al mirar un día en el dashboard incluían pares armados con detecciones del día **anterior**, dificultando revisarlas.
+
+**Ubicación:** `api/database.py::get_stay_proposals()`
+
+**Causa:** La función siempre traía las detecciones `UNMATCHED` del día pedido **y también** las del día anterior, para poder proponer estadías que cruzan la medianoche. Esa mezcla de dos días fue justo el terreno donde ocurrieron ambos incidentes reales de esta sesión: `build_stay_proposals` no distingue "cruza la medianoche de forma legítima" de "el auto ya se fue y volvió otro día" — solo ve dos lecturas UNMATCHED de una patente parecida, sin importar a qué día pertenece cada una.
+
+**Solución aplicada:**
+```python
+# database.py::get_stay_proposals()
+events = get_detection_events(limit=500, match_status="UNMATCHED", date=date)
+proposals = build_stay_proposals(events)
+# antes: además pedía get_detection_events(..., date=previous_date) y unía
+# ambos resultados antes de armar las proposals
+```
+
+**Por qué funciona:** Una detección de ayer que sigue sin resolver aparece al mirar el día de ayer, no mezclada en el día de hoy — cada propuesta queda acotada a un único día, más fácil de revisar. Costo aceptado: una estadía real que cruza la medianoche ya no se propone automáticamente al mirar ninguno de los dos días por separado; queda para conciliación manual (`/api/stays/reconcile`) si hace falta.
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
