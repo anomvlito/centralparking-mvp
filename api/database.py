@@ -965,12 +965,24 @@ def consolidate_fuzzy_sightings(date: str, limit: int = 2000) -> dict:
 
 
 def auto_reconcile_exact_matches(date: str, limit: int = 200) -> dict:
+    # Antes también procesaba automáticamente proposals FUZZY de <=1 minuto
+    # como "duplicado" (misma patente aproximada, re-lectura). Eso asumía
+    # que la lectura MÁS TARDÍA del par era la sobrante a descartar, sin
+    # verificar cuál de las dos era la correcta — casos reales 2026-08-11
+    # (KFCR16/AFCR16, RPCG72/SYHS56 el día anterior) mostraron que a veces
+    # descartaba la lectura correcta y dejaba viva la errónea, huérfana el
+    # resto del día. Esa clase de ambigüedad (mismo auto, OCR inconsistente
+    # en una ráfaga corta) ahora la resuelve mejor
+    # consolidate_fuzzy_sightings() (ver ADR-005): mira todas las lecturas
+    # crudas del grupo, no solo dos, y vota por la que más se repite. EXACT
+    # ya no puede colisionar con esto: STAY_MIN_DURATION_SECONDS exige >=5
+    # minutos, muy por encima de cualquier "duplicado" de re-lectura.
     entry_duplicates = consolidate_short_entry_duplicates(date)
     proposals = [
         item for item in get_stay_proposals(
             date=date, limit=limit, include_duplicate_duration=True
         )
-        if item["match_type"] == "EXACT" or item["duration_minutes"] <= 1
+        if item["match_type"] == "EXACT"
     ]
     reconciled = 0
     duplicates = 0

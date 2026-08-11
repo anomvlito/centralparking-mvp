@@ -135,6 +135,43 @@ resultado del test.
 - No cambia el contrato de `parking_sessions`/`DetectionEvent` ni las rutas
   consumidas por el frontend existentes.
 
+## Fix 2026-08-11: `auto_reconcile_exact_matches` competía con esto y perdía
+
+Activada en producción (ver "Activación en producción" en el feature doc),
+aparecieron dos casos reales el mismo día siguiente en los que **ninguna**
+lectura correcta quedaba visible — ni la ganadora de la consolidación
+difusa:
+
+- `RPCG72`/`SYHS56` (2026-08-10→11): la salida real de un día se emparejó
+  como "entrada" y la entrada real del día siguiente como "salida".
+- `KFCR16`/`AFCR16`/`MERR16` (2026-08-11): de 3 lecturas de un mismo auto,
+  solo quedó visible la peor (`MERR16`, 80% de confianza).
+
+Causa: `auto_reconcile_exact_matches` (preexistente, no parte de este
+feature) auto-reconciliaba también proposals `FUZZY` de duración
+`<= 1 minuto` como "duplicado" (`is_duplicate_duration`, umbral 120s),
+asumiendo siempre que la lectura **más tardía** del par era la sobrante a
+descartar — sin verificar cuál de las dos era la correcta. Como esa función
+corre *antes* que `consolidate_fuzzy_sightings` en cada refresco del
+dashboard, en ambos casos reales terminó descartando la lectura correcta
+antes de que la consolidación difusa pudiera evaluar el grupo completo; la
+consolidación, al ver que la lectura ganadora ya no estaba `UNMATCHED`,
+solo alcanzaba a descartar la perdedora — dejando ninguna lectura correcta
+disponible.
+
+Corregido en `api/database.py::auto_reconcile_exact_matches()`: ya no
+procesa proposals `FUZZY` bajo ningún umbral de duración, solo `EXACT`
+(que además ya no puede colisionar con esto — `STAY_MIN_DURATION_SECONDS`
+exige >= 5 minutos, muy por encima de cualquier "duplicado" de re-lectura).
+Toda ambigüedad de OCR entre lecturas parecidas en una ráfaga corta queda
+exclusivamente en manos de `consolidate_fuzzy_sightings`, que sí mira todas
+las lecturas crudas del grupo y no solo dos.
+
+Los 2 casos reales se corrigieron manualmente en producción: sesiones mal
+armadas anuladas (`VOID`), detecciones liberadas a `UNMATCHED`, y el ciclo
+automático de conciliación las volvió a emparejar correctamente apenas se
+liberaron.
+
 ## Trabajo futuro
 
 - Correr en `shadow_mode` contra tráfico real y revisar visualmente una

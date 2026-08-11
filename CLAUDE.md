@@ -288,6 +288,29 @@ class _NoCommitConnection:
 
 ---
 
+### ✅ [RESUELTO] `auto_reconcile_exact_matches` Descartaba la Lectura Correcta en Ráfagas de OCR Inconsistente
+
+**Problema:** Dos casos reales el 2026-08-11: (1) `RPCG72`/`SYHS56` — la salida real de un auto un día se emparejó como "entrada" y la entrada real del día siguiente como "salida"; (2) `KFCR16`/`AFCR16`/`MERR16` — de 3 lecturas del mismo auto, solo quedó visible la peor (80% de confianza). En ambos casos, ninguna lectura correcta del auto quedaba disponible en el dashboard.
+
+**Ubicación:** `api/database.py::auto_reconcile_exact_matches()`
+
+**Causa:** Además de `EXACT`, la función también auto-reconciliaba proposals `FUZZY` (patente parecida, no idéntica) de duración `<= 1 minuto` como "duplicado" (`is_duplicate_duration`, umbral 120s) — asumiendo siempre que la lectura **más tardía** del par era la sobrante a descartar, sin verificar cuál de las dos era la correcta. Como esto corre *antes* que `consolidate_fuzzy_sightings` (ver ADR-005) en cada refresco del dashboard, en ambos casos reales descartó la lectura correcta antes de que la consolidación difusa pudiera evaluar el grupo completo — que al ver que la ganadora ya no estaba `UNMATCHED`, solo alcanzaba a descartar la perdedora.
+
+**Solución aplicada:**
+```python
+# database.py::auto_reconcile_exact_matches()
+proposals = [
+    item for item in get_stay_proposals(
+        date=date, limit=limit, include_duplicate_duration=True
+    )
+    if item["match_type"] == "EXACT"  # antes: == "EXACT" or duration_minutes <= 1
+]
+```
+
+**Por qué funciona:** `EXACT` ya no puede colisionar con esto — `STAY_MIN_DURATION_SECONDS` (ver fix anterior, "Conciliación Automática Cerraba Estadías Falsas...") exige >= 5 minutos, muy por encima de cualquier "duplicado" de re-lectura. Toda ambigüedad entre lecturas parecidas de una misma ráfaga corta queda exclusivamente en manos de `consolidate_fuzzy_sightings`, que mira todas las lecturas crudas del grupo (no solo dos) y vota por la que más se repite — ver ADR-005, sección "Fix 2026-08-11".
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:

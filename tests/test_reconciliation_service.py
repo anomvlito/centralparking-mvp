@@ -123,9 +123,20 @@ class ReconciliationServiceTests(unittest.TestCase):
     @patch("api.database.get_stay_proposals")
     @patch("api.database.reconcile_detection_events")
     @patch("api.database.consolidate_short_entry_duplicates")
-    def test_auto_reconciliation_discards_one_minute_fuzzy_proposal(
+    def test_auto_reconciliation_never_touches_fuzzy_proposals(
         self, consolidate, reconcile, get_proposals
     ):
+        """Regresión 2026-08-11: antes, un FUZZY de <=1 minuto se
+        auto-reconciliaba como "duplicado" asumiendo que la lectura más
+        tardía del par era la sobrante — sin verificar cuál era la
+        correcta. Casos reales (KFCR16/AFCR16, RPCG72/SYHS56) mostraron que
+        a veces descartaba la lectura CORRECTA. Esa ambigüedad ahora la
+        resuelve consolidate_fuzzy_sightings (ver ADR-005), que mira todas
+        las lecturas crudas del grupo en vez de solo dos. auto_reconcile_
+        exact_matches ya no debe tocar ningún FUZZY, sin importar la
+        duración — solo EXACT (ya acotado a >=5 min por
+        STAY_MIN_DURATION_SECONDS, nunca puede ser un "duplicado" de
+        re-lectura)."""
         consolidate.return_value = 0
         get_proposals.return_value = [{
             "entry": {"detection_id": 1},
@@ -134,16 +145,38 @@ class ReconciliationServiceTests(unittest.TestCase):
             "match_type": "FUZZY",
             "duration_minutes": 1,
         }]
-        reconcile.return_value = {"status": "DUPLICATE"}
 
         result = auto_reconcile_exact_matches("2026-07-28")
 
-        self.assertEqual(result["duplicates"], 1)
+        self.assertEqual(result["duplicates"], 0)
+        self.assertEqual(result["reconciled"], 0)
         self.assertEqual(result["entry_duplicates"], 0)
-        reconcile.assert_called_once_with(1, 2, "ABC123", match_type="FUZZY")
+        reconcile.assert_not_called()
         get_proposals.assert_called_once_with(
             date="2026-07-28", limit=200, include_duplicate_duration=True
         )
+
+    @patch("api.database.get_stay_proposals")
+    @patch("api.database.reconcile_detection_events")
+    @patch("api.database.consolidate_short_entry_duplicates")
+    def test_auto_reconciliation_still_processes_exact_proposals(
+        self, consolidate, reconcile, get_proposals
+    ):
+        consolidate.return_value = 0
+        get_proposals.return_value = [{
+            "entry": {"detection_id": 1},
+            "exit": {"detection_id": 2},
+            "resolved_plate": "ABC123",
+            "match_type": "EXACT",
+            "duration_minutes": 120,
+        }]
+        reconcile.return_value = {"status": "REAL"}
+
+        result = auto_reconcile_exact_matches("2026-07-28")
+
+        self.assertEqual(result["reconciled"], 1)
+        self.assertEqual(result["duplicates"], 0)
+        reconcile.assert_called_once_with(1, 2, "ABC123", match_type="EXACT")
 
     def test_reconciliation_rejects_non_six_character_plate_before_db(self):
         with self.assertRaisesRegex(ValueError, "exactamente 6"):
