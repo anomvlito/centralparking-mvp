@@ -71,25 +71,32 @@ class ReconciliationServiceTests(unittest.TestCase):
         """Regresión 2026-08-10: SHKV20 esperó ~2m30s cupo en la entrada y
         generó dos avistamientos separados (fuera de STAGING_TTL_SECONDS =
         120s), que auto_reconcile_exact_matches tomó como una estadía EXACT
-        real de pocos minutos — el auto nunca se fue. Con
-        STAY_MIN_DURATION_SECONDS el par ya no califica como EXACT (cae a
-        FUZZY, que solo se auto-reconcilia si dura <= 1 minuto)."""
+        real de pocos minutos — el auto nunca se fue.
+
+        Con STAY_MIN_DURATION_SECONDS el par ya no califica como EXACT.
+        Desde 2026-08-12 (ver test_fuzzy_proposal_requires_minimum_duration)
+        ese mismo mínimo también se exige en FUZZY, así que este par —menos
+        de 5 minutos, sin importar que sea la misma patente— ya no genera
+        ninguna propuesta: no es una estadía real bajo ningún tipo."""
         events = [
             self._event(1, "SHKV20", "2026-08-10T09:42:04-04:00"),
             self._event(2, "SHKV20", "2026-08-10T09:44:34-04:00"),
         ]
         proposals = build_stay_proposals(events)
-        self.assertEqual(len(proposals), 1)
-        self.assertNotEqual(proposals[0]["match_type"], "EXACT")
+        self.assertEqual(proposals, [])
 
     def test_exact_requires_minimum_duration(self):
+        """Por debajo del mínimo no califica como EXACT — y, desde que el
+        mismo mínimo también se exige en FUZZY (ver
+        test_fuzzy_proposal_requires_minimum_duration), tampoco cae ahí:
+        no genera ninguna propuesta, mismo criterio que
+        test_short_gap_same_plate_does_not_become_exact."""
         events = [
             self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),
             self._event(2, "ABC123", "2026-07-28T08:04:59-04:00"),
         ]
         proposals = build_stay_proposals(events)
-        self.assertEqual(len(proposals), 1)
-        self.assertNotEqual(proposals[0]["match_type"], "EXACT")
+        self.assertEqual(proposals, [])
 
     def test_exact_allowed_at_minimum_duration_boundary(self):
         events = [
@@ -110,6 +117,27 @@ class ReconciliationServiceTests(unittest.TestCase):
         self.assertEqual(len(proposals), 1)
         self.assertEqual(proposals[0]["match_type"], "FUZZY")
         self.assertEqual(proposals[0]["distance"], 1)
+
+    def test_fuzzy_proposal_requires_minimum_duration(self):
+        """Caso real 2026-08-12: PCYD65/HCYD63 (ver ADR-005) son la misma
+        ráfaga de un solo auto, no una estadía — sin este mínimo, FUZZY las
+        proponía igual con 0 minutos de diferencia. Mismo umbral que ya
+        protege a EXACT (STAY_MIN_DURATION_SECONDS)."""
+        events = [
+            self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),
+            self._event(2, "ABC128", "2026-07-28T08:04:59-04:00"),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(proposals, [])
+
+    def test_fuzzy_proposal_allowed_at_minimum_duration_boundary(self):
+        events = [
+            self._event(1, "ABC123", "2026-07-28T08:00:00-04:00"),
+            self._event(2, "ABC128", "2026-07-28T08:05:00-04:00"),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["match_type"], "FUZZY")
 
     def test_fuzzy_proposal_resolved_plate_picks_higher_confidence_reading(self):
         """Caso real 2026-08-12: TFCR16 (entrada, 0.86) / KFCR16 (salida,

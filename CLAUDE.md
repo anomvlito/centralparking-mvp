@@ -374,6 +374,27 @@ resolved_plate = (
 
 ---
 
+### ✅ [RESUELTO] Propuestas `FUZZY` No Tenían Mínimo de Duración — Proponían Estadías de 0 Minutos
+
+**Problema:** Caso real 2026-08-12: `PCYD65`/`HCYD63` (el caso original de ADR-005 — dos lecturas de una sola ráfaga de un mismo auto, no una estadía) se proponían como entrada+salida `FUZZY` con **0 minutos** de diferencia. `STAY_MIN_DURATION_SECONDS` (5 min) ya protegía a las coincidencias `EXACT` desde el fix anterior ("Conciliación Automática Cerraba Estadías Falsas..."), pero nunca se extendió a `FUZZY`.
+
+**Ubicación:** `api/database.py::build_stay_proposals()`
+
+**Causa:** `add_pairs(1, "FUZZY")` no pasaba `min_seconds`, a diferencia de `add_pairs(0, "EXACT", min_seconds=STAY_MIN_DURATION_SECONDS)`.
+
+**Evaluado y descartado en la misma revisión:** también se evaluó admitir longitud de patente inválida y ampliar la distancia de comparación a 2 en este emparejador (mismo criterio que ADR-007/008 para la consolidación de avistamientos) — para el caso puntual `GVH1143`/`GVHH43`. Se **descartó**: a diferencia de la consolidación (que compara lecturas de una misma ráfaga de ~90s, casi seguro el mismo auto), acá se compara contra cualquier lectura del día (hasta 24h) — y se encontraron **149 pares de patentes reales y distintas** ya confirmadas en el historial a distancia ≤2 una de la otra (ej. `PGSY86`/`PPSL86`, `SYHS56`/`SYZS56`). Ampliar ahí sí arriesgaba emparejar dos autos reales distintos en una estadía falsa. `GVH1143` (longitud inválida) ya aparece hoy en el dashboard, en "Evidencia fuera de conciliación", para corrección manual — no requiere cambio de código.
+
+**Solución aplicada:**
+```python
+# database.py::build_stay_proposals()
+add_pairs(0, "EXACT", min_seconds=STAY_MIN_DURATION_SECONDS)
+add_pairs(1, "FUZZY", min_seconds=STAY_MIN_DURATION_SECONDS)  # antes: sin min_seconds
+```
+
+**Por qué funciona:** Mismo umbral ya validado para `EXACT`, sin ampliar a qué se compara (ni longitud ni distancia) — solo exige que haya pasado tiempo real entre las dos lecturas, sin importar si el string coincide exacto o es "parecido". Costo aceptado: un caso de mismo string con brecha corta (ej. `SHKV20`, ~2m30s) ya no genera ninguna propuesta en absoluto (antes caía a `FUZZY` para revisión manual) — tampoco es una estadía real, así que no proponerla es coherente con el criterio ya usado para `EXACT`.
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
