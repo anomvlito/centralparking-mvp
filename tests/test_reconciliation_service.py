@@ -111,6 +111,31 @@ class ReconciliationServiceTests(unittest.TestCase):
         self.assertEqual(proposals[0]["match_type"], "FUZZY")
         self.assertEqual(proposals[0]["distance"], 1)
 
+    def test_fuzzy_proposal_resolved_plate_picks_higher_confidence_reading(self):
+        """Caso real 2026-08-12: TFCR16 (entrada, 0.86) / KFCR16 (salida,
+        0.96, la correcta). Antes, resolved_plate siempre tomaba la de
+        entrada sin comparar confianza."""
+        events = [
+            self._event(1, "TFCR16", "2026-08-12T08:01:50-04:00", confidence=0.8585),
+            self._event(2, "KFCR16", "2026-08-12T16:32:57-04:00", confidence=0.9649),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["match_type"], "FUZZY")
+        self.assertEqual(proposals[0]["resolved_plate"], "KFCR16")
+
+    def test_fuzzy_proposal_resolved_plate_keeps_entry_when_entry_is_better(self):
+        """No-regresión: si la entrada tiene mayor confianza que la salida,
+        resolved_plate sigue siendo la de entrada — el fix compara, no
+        invierte el default a "siempre salida"."""
+        events = [
+            self._event(1, "ABC123", "2026-07-28T08:00:00-04:00", confidence=0.99),
+            self._event(2, "ABC128", "2026-07-28T10:00:00-04:00", confidence=0.91),
+        ]
+        proposals = build_stay_proposals(events)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["resolved_plate"], "ABC123")
+
     @patch("api.database.get_detection_events")
     def test_one_minute_proposals_are_not_returned_to_dashboard(self, get_events):
         get_events.return_value = [

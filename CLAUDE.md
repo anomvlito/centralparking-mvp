@@ -352,6 +352,28 @@ if len(winner_group) <= 2 and best["confidence"] < MIN_SINGLE_VOTE_CONFIDENCE:
 
 ---
 
+### ✅ [RESUELTO] Propuestas de Estadía Mostraban Siempre la Patente de Entrada, Aunque Fuera la Peor Lectura
+
+**Problema:** Caso real 2026-08-12: el mismo auto se leyó como `TFCR16` al entrar (08:01, 86% de confianza) y como `KFCR16` al salir (16:32, 96%, la correcta). La propuesta de conciliación (`FUZZY`, distancia 1) mostraba `TFCR16` como "la" patente resuelta del auto — la peor de las dos lecturas, no la mejor.
+
+**Ubicación:** `api/database.py::build_stay_proposals()`
+
+**Causa:** `resolved_plate` se fijaba siempre como `entry["normalized_plate"]`, sin comparar contra la confianza de la salida. Para propuestas `EXACT` (distancia 0) esto nunca importa —entrada y salida ya son el mismo string—, pero para `FUZZY` (entrada y salida difieren) elegía la lectura de entrada por convención, no por ser la correcta.
+
+**Solución aplicada:**
+```python
+# database.py::build_stay_proposals()
+resolved_plate = (
+    entry["normalized_plate"]
+    if entry["confidence"] >= exit_event["confidence"]
+    else exit_event["normalized_plate"]
+)
+```
+
+**Por qué funciona:** Compara la confianza real de ambas lecturas en vez de asumir que la de entrada es la correcta. No cambia el comportamiento para `EXACT` (mismo string en ambos lados). Ninguna propuesta se auto-aplica sin confirmación humana (ver HU-011), así que esto no cambiaba una estadía ya cerrada — corrige qué patente se le sugiere al admin como default al revisar.
+
+---
+
 ## Patrón para Agregar Bugs Futuros
 
 Al resolver un nuevo bug, agregá aquí:
