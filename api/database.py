@@ -706,10 +706,20 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
                 continue
             exit_event = best[3]
             used.update({entry["detection_id"], exit_event["detection_id"]})
+            # La patente resuelta es la de mayor confianza, no siempre la de
+            # entrada. Caso real 2026-08-12: TFCR16 (entrada, 0.86) vs
+            # KFCR16 (salida, 0.96, la correcta) — con distancia > 0 ("FUZZY")
+            # entrada y salida difieren en el string, y usar siempre la de
+            # entrada mostraba la peor lectura como "la" patente del auto.
+            resolved_plate = (
+                entry["normalized_plate"]
+                if entry["confidence"] >= exit_event["confidence"]
+                else exit_event["normalized_plate"]
+            )
             proposals.append({
                 "entry": entry,
                 "exit": exit_event,
-                "resolved_plate": entry["normalized_plate"],
+                "resolved_plate": resolved_plate,
                 "match_type": match_type,
                 "distance": best[0],
                 "score": round(-best[1], 4),
