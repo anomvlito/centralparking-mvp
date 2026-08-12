@@ -727,7 +727,7 @@ def build_stay_proposals(events: list[dict], max_hours: int = 24) -> list[dict]:
             })
 
     add_pairs(0, "EXACT", min_seconds=STAY_MIN_DURATION_SECONDS)
-    add_pairs(1, "FUZZY")
+    add_pairs(1, "FUZZY", min_seconds=STAY_MIN_DURATION_SECONDS)
     return sorted(proposals, key=lambda item: item["exit"]["detected_at"], reverse=True)
 
 
