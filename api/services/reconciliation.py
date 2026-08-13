@@ -6,7 +6,6 @@ from api.database import (
     get_detection_events,
     get_parking_stays,
     get_stay_proposals,
-    get_subscriber_stay_proposals,
     reconcile_detection_events,
     set_detection_direction,
 )
@@ -26,16 +25,6 @@ def list_stays(limit=100, status=None, date=None, plate=None):
 
 def list_proposals(date, limit=100):
     return get_stay_proposals(date=date, limit=limit)
-
-
-def list_subscriber_detections(limit=100, match_status=None, date=None):
-    return get_detection_events(
-        limit=limit, match_status=match_status, date=date, subscribers=True
-    )
-
-
-def list_subscriber_proposals(date, limit=100):
-    return get_subscriber_stay_proposals(date=date, limit=limit)
 
 def reconcile_exact(date, limit=200):
     return auto_reconcile_exact_matches(date=date, limit=limit)

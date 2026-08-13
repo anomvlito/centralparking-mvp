@@ -12,8 +12,6 @@ from api.services.reconciliation import (
     list_detections,
     list_stays,
     list_proposals,
-    list_subscriber_detections,
-    list_subscriber_proposals,
     reconcile_exact,
     create_plate_exclusion,
     reconcile_stay,
@@ -91,36 +89,6 @@ async def proposals(
 ):
     try:
         return list_proposals(date=date, limit=limit)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-
-@router.get("/api/subscribers/detections")
-async def subscriber_detections(
-    limit: int = Query(100, ge=1, le=500),
-    match_status: str | None = None,
-    date: str | None = None,
-    _: dict = Depends(require_admin),
-):
-    """HU-014: avistamientos de abonados, aparte del tráfico regular."""
-    try:
-        return list_subscriber_detections(
-            limit=limit, match_status=match_status, date=date
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-
-@router.get("/api/subscribers/stay-proposals")
-async def subscriber_proposals(
-    date: str,
-    limit: int = Query(100, ge=1, le=200),
-    _: dict = Depends(require_admin),
-):
-    """HU-014: mismo armado de propuestas entrada/salida que
-    /api/stay-proposals, acotado a avistamientos de abonados."""
-    try:
-        return list_subscriber_proposals(date=date, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

@@ -118,9 +118,7 @@ def calculate_quality_score(img: np.ndarray, plate: str, confidence: float) -> d
 
 def staging_submit(plate: str, confidence: float, quality: dict,
                    strategy: Optional[str] = None, img: Optional[np.ndarray] = None,
-                   detected_at: Optional[datetime.datetime] = None,
-                   is_subscriber: bool = False,
-                   subscriber_plate: Optional[str] = None) -> dict:
+                   detected_at: Optional[datetime.datetime] = None) -> dict:
     """
     Ingresa una detección al buffer.
     Solo se escribe una imagen a disco por patente/ventana: la de mejor
@@ -134,11 +132,6 @@ def staging_submit(plate: str, confidence: float, quality: dict,
     en que termina de procesarse el video (puede ser varios minutos después
     de la captura real si la cola de procesamiento está ocupada), no la hora
     real del pase del vehículo.
-
-    is_subscriber/subscriber_plate (HU-014): resueltos por
-    ftp_handler._handle_auto_detection contra plate_exclusions; se guardan
-    en staging_detections para sobrevivir el TTL y llegar a
-    staging_promote_expired(), que los propaga a log_to_db().
     """
     combined = quality["combined_score"]
     expires_at = now_cl() + datetime.timedelta(seconds=STAGING_TTL_SECONDS)
@@ -171,15 +164,12 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                         INSERT INTO staging_detections
                             (plate, confidence, quality_score, combined_score,
                              sharpness, contrast_score, brightness_score, ocr_clarity,
-                             strategy, status, expires_at, image_path, detected_at,
-                             is_subscriber, subscriber_plate)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,COALESCE(%s, now()),
-                                %s,%s)
+                             strategy, status, expires_at, image_path, detected_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,COALESCE(%s, now()))
                     """, (plate, confidence, quality["quality_score"], combined,
                           quality["sharpness"], quality["contrast_score"],
                           quality["brightness_score"], quality["ocr_clarity"],
-                          strategy, expires_at, image_path, detected_at,
-                          is_subscriber, subscriber_plate))
+                          strategy, expires_at, image_path, detected_at))
                     _audit(plate, "SUPERSEDED",
                            {"old_score": float(existing["combined_score"]),
                             "new_score": combined})
@@ -192,14 +182,13 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                             (plate, confidence, quality_score, combined_score,
                              sharpness, contrast_score, brightness_score, ocr_clarity,
                              strategy, status, rejection_reason, expires_at, image_path,
-                             detected_at, is_subscriber, subscriber_plate)
+                             detected_at)
                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'rejected','inferior_quality',%s,NULL,
-                                COALESCE(%s, now()), %s, %s)
+                                COALESCE(%s, now()))
                     """, (plate, confidence, quality["quality_score"], combined,
                           quality["sharpness"], quality["contrast_score"],
                           quality["brightness_score"], quality["ocr_clarity"],
-                          strategy, expires_at, detected_at,
-                          is_subscriber, subscriber_plate))
+                          strategy, expires_at, detected_at))
                     result = {"status": "rejected", "action": "inferior_quality",
                               "combined_score": combined,
                               "best_score": float(existing["combined_score"]),
@@ -211,15 +200,12 @@ def staging_submit(plate: str, confidence: float, quality: dict,
                     INSERT INTO staging_detections
                         (plate, confidence, quality_score, combined_score,
                          sharpness, contrast_score, brightness_score, ocr_clarity,
-                         strategy, status, expires_at, image_path, detected_at,
-                         is_subscriber, subscriber_plate)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,COALESCE(%s, now()),
-                            %s,%s)
+                         strategy, status, expires_at, image_path, detected_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,COALESCE(%s, now()))
                 """, (plate, confidence, quality["quality_score"], combined,
                       quality["sharpness"], quality["contrast_score"],
                       quality["brightness_score"], quality["ocr_clarity"],
-                      strategy, expires_at, image_path, detected_at,
-                      is_subscriber, subscriber_plate))
+                      strategy, expires_at, image_path, detected_at))
                 result = {"status": "pending", "action": "first_in_window",
                           "combined_score": combined, "image_path": image_path}
 
@@ -241,7 +227,7 @@ def staging_promote_expired():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, plate, confidence, combined_score, strategy,
-                       image_path, detected_at, is_subscriber, subscriber_plate
+                       image_path, detected_at
                 FROM staging_detections
                 WHERE status = 'pending' AND expires_at <= now()
             """)
@@ -268,9 +254,7 @@ def staging_promote_expired():
                           conf=float(row["combined_score"]),
                           image_path=row["image_path"],
                           direction=direction,
-                          logged_at=row["detected_at"],
-                          is_subscriber=row["is_subscriber"],
-                          subscriber_plate=row["subscriber_plate"])
+                          logged_at=row["detected_at"])
                 _audit(plate, "DETECTED",
                        {"combined_score": float(row["combined_score"]),
                         "strategy": row["strategy"]})
