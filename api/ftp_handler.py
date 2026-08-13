@@ -27,7 +27,7 @@ from api.detect import alpr, HAS_ML, run_multi_strategy
 from api.database import (
     now_cl,
     find_similar_active_session, correct_session_plate, log_audit_event,
-    promote_review_image, get_plate_exclusion_match
+    promote_review_image, is_plate_excluded
 )
 from api.auth import get_current_user, require_admin
 from api.staging import calculate_quality_score, staging_submit
@@ -53,14 +53,6 @@ FTP_REVIEW_DIR   = os.environ.get("FTP_REVIEW_DIR",  "/ftp/revisar")
 # Ver ADR-006 — imágenes de avistamientos descartados por consolidación
 # difusa, movidas (nunca borradas) desde /ftp/historico.
 FTP_DISCARDED_DIR = os.environ.get("FTP_DISCARDED_DIR", "/ftp/descartadas")
-
-# HU-014: la única excepción que se sigue descartando por completo (sin
-# foto, sin fila en detection_log) es la patente del dueño del
-# estacionamiento — comparada por la patente misma (normalizada), no por
-# quién la cargó en plate_exclusions. Cualquier otro match contra
-# plate_exclusions (abonados reales) pasa a registrarse por el pipeline
-# normal, solo marcado aparte — ver _handle_auto_detection.
-OWNER_EXCLUDED_PLATE = "CYLF87"
 
 
 # ─────────────────────────── Helpers ────────────────────────────────────────
@@ -139,21 +131,11 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
     El flujo de fotos (/api/ftp/image) no lo pasa (None → now() real, la
     subida es casi inmediata). El flujo de video sí lo pasa (mtime del
     .mp4 al llegar por FTP) — ver _process_ftp_video_and_register.
-
-    HU-014: un match contra plate_exclusions ya no descarta todo por
-    igual. CYLF87 (el dueño) se sigue ignorando por completo, sin foto ni
-    registro. El resto de los abonados sigue el mismo camino que un
-    vehículo regular (staging → detection_log), marcado is_subscriber para
-    que las consultas del Dashboard lo dejen afuera y quede en su propia
-    sección — ver get_detection_events(subscribers=...).
     """
-    exclusion_match = get_plate_exclusion_match(plate)
-    if exclusion_match and exclusion_match["normalized_plate"] == OWNER_EXCLUDED_PLATE:
+    if is_plate_excluded(plate):
         _append_ftp_event(plate, source, confidence, strategy, action="IGNORED_MONTHLY")
         return {"plate": plate, "action": "IGNORED_MONTHLY", "registered": False,
                 "confidence": confidence, "image_path": None}
-    is_subscriber = exclusion_match is not None
-    subscriber_plate = exclusion_match["normalized_plate"] if exclusion_match else None
 
     # No hay match exacto, pero puede ser el mismo auto mal leído antes
     # (dígito perdido por luces, carácter confundido). Si hay una sesión
@@ -182,9 +164,7 @@ def _handle_auto_detection(plate: str, source: str, confidence: float,
     # Calcular quality score y enviar a staging (decide ahí si guarda la imagen)
     quality = _quality_for(img, plate, confidence)
     staging_result = staging_submit(plate, confidence, quality, strategy, img,
-                                     detected_at=detected_at,
-                                     is_subscriber=is_subscriber,
-                                     subscriber_plate=subscriber_plate)
+                                     detected_at=detected_at)
     direction = direction_service.observe(
         plate=plate,
         center_y=center_y,

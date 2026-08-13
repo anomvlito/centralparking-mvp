@@ -81,20 +81,6 @@ def init_db():
                 ALTER TABLE detection_log
                 ADD COLUMN IF NOT EXISTS source VARCHAR(40)
             """)
-            # HU-014: avistamientos de abonados (plate_exclusions) que ya no
-            # se descartan sin rastro. is_subscriber los separa del tráfico
-            # regular en las consultas del Dashboard; subscriber_plate guarda
-            # la patente de abonado que matcheó (no siempre igual a `plate`,
-            # que es la lectura OCR cruda) para poder identificarlo aun con
-            # variantes de lectura.
-            cur.execute("""
-                ALTER TABLE detection_log
-                ADD COLUMN IF NOT EXISTS is_subscriber BOOLEAN NOT NULL DEFAULT false
-            """)
-            cur.execute("""
-                ALTER TABLE detection_log
-                ADD COLUMN IF NOT EXISTS subscriber_plate VARCHAR(6)
-            """)
             cur.execute("""
                 UPDATE detection_log
                 SET normalized_plate = regexp_replace(upper(plate), '[^A-Z0-9]', '', 'g')
@@ -151,17 +137,6 @@ def init_db():
                 ALTER TABLE staging_detections
                 ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'ENTRY'
             """)
-            # HU-014: mismo par de columnas que detection_log, para que la
-            # marca de abonado sobreviva el buffer de staging hasta la
-            # promoción (staging_promote_expired → log_to_db).
-            cur.execute("""
-                ALTER TABLE staging_detections
-                ADD COLUMN IF NOT EXISTS is_subscriber BOOLEAN NOT NULL DEFAULT false
-            """)
-            cur.execute("""
-                ALTER TABLE staging_detections
-                ADD COLUMN IF NOT EXISTS subscriber_plate VARCHAR(6)
-            """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_staging_detections_plate_kind_status
                 ON staging_detections(plate, kind, status)
@@ -215,10 +190,6 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_detection_log_match_status
                 ON detection_log(match_status, logged_at DESC)
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_detection_log_is_subscriber
-                ON detection_log(is_subscriber, logged_at DESC)
             """)
             cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_parking_sessions_entry_detection
@@ -565,25 +536,15 @@ def is_duplicate_duration(
     return 0 < (exit_time - entry_time).total_seconds() < 120
 
 
-def find_plate_exclusion_match(cur, normalized: str) -> Optional[dict]:
-    """
-    Devuelve la fila de `plate_exclusions` que matchea (fuzzy, por
-    max_distance) o None. HU-014 la usa para distinguir CYLF87 (dueño, se
-    sigue descartando por completo) del resto de los abonados (se
-    registran, ver ftp_handler._handle_auto_detection).
-    """
+def _is_excluded(cur, normalized: str) -> bool:
     cur.execute("""
         SELECT normalized_plate, max_distance FROM plate_exclusions
         WHERE active = true
     """)
-    for row in cur.fetchall():
-        if plate_matches_exclusion(normalized, row["normalized_plate"], row["max_distance"]):
-            return dict(row)
-    return None
-
-
-def _is_excluded(cur, normalized: str) -> bool:
-    return find_plate_exclusion_match(cur, normalized) is not None
+    return any(
+        plate_matches_exclusion(normalized, row["normalized_plate"], row["max_distance"])
+        for row in cur.fetchall()
+    )
 
 
 def add_plate_exclusion(plate: str, max_distance: int, username: str) -> dict:
@@ -660,8 +621,7 @@ def add_plate_exclusion(plate: str, max_distance: int, username: str) -> dict:
 def log_to_db(plate: str, action: str, status: str = "REAL",
               fee: float = 0, conf: float = 1.0, image_path: str = None,
               direction: str = "UNKNOWN", source: str = None,
-              logged_at: datetime.datetime = None,
-              is_subscriber: bool = False, subscriber_plate: str = None):
+              logged_at: datetime.datetime = None):
     """
     logged_at es opcional: por defecto usa now() de Postgres (comportamiento
     histórico, correcto para ENTRY/EXIT/VOID manuales, donde "ahora" es la
@@ -669,37 +629,23 @@ def log_to_db(plate: str, action: str, status: str = "REAL",
     porque ahí "ahora" es el momento de la promoción (hasta ~150s después de
     la detección real, o mucho más si el backend estuvo caído) y no la hora
     real en que se guardó la foto.
-
-    is_subscriber/subscriber_plate (HU-014): solo staging_promote_expired()
-    los pasa, propagando lo que ya resolvió _handle_auto_detection al
-    recibir la lectura original. Con is_subscriber=True el match automático
-    contra plate_exclusions dentro de esta función se omite a propósito —
-    ya sabemos que matchea (por eso está acá y no fue descartada del todo
-    como CYLF87) y queremos que quede UNMATCHED, no DISMISSED, para que
-    participe del mismo armado de propuestas entrada/salida que un vehículo
-    regular. El resto de los llamadores (ENTRY/EXIT/VOID manuales, mocks)
-    no pasan el flag: para ellos el chequeo automático sigue sin cambios.
     """
     normalized = normalize_plate(plate)
     with _db() as conn:
         with conn.cursor() as cur:
             match_status = (
                 "INVALID_FORMAT" if len(normalized) != 6
-                else "UNMATCHED" if is_subscriber
                 else "DISMISSED" if _is_excluded(cur, normalized)
                 else "UNMATCHED"
             )
             cur.execute("""
                 INSERT INTO detection_log
                     (plate, normalized_plate, action, status, fee, confidence,
-                     image_path, direction, match_status, source, logged_at,
-                     is_subscriber, subscriber_plate)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()),
-                        %s, %s)
+                     image_path, direction, match_status, source, logged_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
                 RETURNING id
             """, (plate, normalized, action, status, fee, conf, image_path,
-                  direction, match_status, source or status, logged_at,
-                  is_subscriber, subscriber_plate))
+                  direction, match_status, source or status, logged_at))
             row = cur.fetchone()
     return int(row["id"])
 
@@ -802,20 +748,6 @@ def get_stay_proposals(
         proposals = [
             item for item in proposals if item["duration_minutes"] > 1
         ]
-    return proposals[:max(1, min(limit, 200))]
-
-
-def get_subscriber_stay_proposals(date: str, limit: int = 200) -> list[dict]:
-    """
-    HU-014: mismo armado que get_stay_proposals (build_stay_proposals sin
-    modificar: EXACT/FUZZY, mínimo de 5 minutos, patente resuelta por
-    confianza), aplicado solo a avistamientos de abonados.
-    """
-    events = get_detection_events(
-        limit=500, match_status="UNMATCHED", date=date, subscribers=True
-    )
-    proposals = build_stay_proposals(events)
-    proposals = [item for item in proposals if item["duration_minutes"] > 1]
     return proposals[:max(1, min(limit, 200))]
 
 
@@ -1232,7 +1164,6 @@ def get_detection_events(
     limit: int = 100,
     match_status: str | None = None,
     date: str | None = None,
-    subscribers: bool = False,
 ) -> list:
     bounded_limit = max(1, min(limit, 500))
     if match_status and match_status not in _DETECTION_MATCH_STATUSES:
@@ -1241,9 +1172,8 @@ def get_detection_events(
     conditions = [
         "action IN ('DETECTED', 'DETECTION')",
         "image_path IS NOT NULL",
-        "is_subscriber = %s",
     ]
-    params: list = [subscribers]
+    params: list = []
     if match_status:
         conditions.append("match_status = %s")
         params.append(match_status)
@@ -1259,8 +1189,7 @@ def get_detection_events(
             cur.execute(f"""
                 SELECT id, plate, COALESCE(normalized_plate, plate) normalized_plate,
                        logged_at, confidence, image_path, direction, match_status,
-                       linked_session_id, COALESCE(source, status) source,
-                       subscriber_plate
+                       linked_session_id, COALESCE(source, status) source
                 FROM detection_log
                 WHERE {' AND '.join(conditions)}
                 ORDER BY logged_at DESC
@@ -1283,7 +1212,6 @@ def get_detection_events(
                 if row["linked_session_id"] is not None else None
             ),
             "source": row["source"],
-            **({"subscriber_plate": row["subscriber_plate"]} if subscribers else {}),
         }
         for row in rows
     ]
@@ -1762,15 +1690,6 @@ def is_plate_excluded(plate: str) -> bool:
     with _db() as conn:
         with conn.cursor() as cur:
             return _is_excluded(cur, normalized)
-
-
-def get_plate_exclusion_match(plate: str) -> Optional[dict]:
-    """Wrapper público de find_plate_exclusion_match (ver HU-014)."""
-    normalized = normalize_plate(plate)
-    with _db() as conn:
-        with conn.cursor() as cur:
-            return find_plate_exclusion_match(cur, normalized)
-
 
 def remove_plate_exclusion(plate: str) -> dict:
     normalized = normalize_plate(plate)
